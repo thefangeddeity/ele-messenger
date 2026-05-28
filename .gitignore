@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.db
 *.bak
+debian/.debhelper/
+debian/ele-messenger/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
