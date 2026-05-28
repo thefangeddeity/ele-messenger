@@ -41,10 +41,11 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_user)")
-        for username, pin in [("Ron", "5454"), ("Carm", "7833")]:
+        count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        if count == 0:
             conn.execute(
-                "INSERT OR IGNORE INTO accounts (username, pin) VALUES (?, ?)",
-                (username, pin)
+                "INSERT INTO accounts (username, pin) VALUES (?, ?)",
+                ("admin", "1234")
             )
         conn.commit()
 
@@ -80,6 +81,7 @@ async def register(data: dict):
         if existing:
             raise HTTPException(409, "username taken")
         conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)", (username, pin))
+        conn.execute("DELETE FROM accounts WHERE username = ?", ("admin",))
         conn.commit()
     return {"status": "ok"}
 
