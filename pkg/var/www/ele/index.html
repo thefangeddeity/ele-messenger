@@ -96,6 +96,17 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 #input-wrap { position: relative; flex: 1; display: flex; align-items: flex-end; margin-left: 2px; }
 #emoji-btn { position: absolute; left: 4px; bottom: 5px; background: transparent; border: none; padding: 3px; cursor: pointer; line-height: 1; border-radius: 50%; }
 #emoji-btn:hover { background: rgba(0,0,0,0.08); }
+#mic-btn { position: absolute; right: 4px; bottom: 5px; background: transparent; border: none; padding: 3px; cursor: pointer; line-height: 1; border-radius: 50%; }
+#mic-btn:hover { background: rgba(0,0,0,0.08); }
+#mic-btn.recording { background: rgba(200,0,0,0.2); }
+@keyframes mic-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+#mic-btn.recording svg { stroke: #cc0000; animation: mic-pulse 1s infinite; }
+#waveform-wrap { display: none; flex: 1; align-items: center; gap: 8px; padding: 0 6px; height: 36px; }
+#waveform-wrap.active { display: flex; }
+#rec-timer { font-size: 13px; color: #cc0000; font-family: monospace; min-width: 36px; flex-shrink: 0; }
+#waveform { flex: 1; height: 32px; }
+#rec-cancel { font-size: 12px; color: #6a8898; white-space: nowrap; flex-shrink: 0; user-select: none; }
+#rec-cancel.warn { color: #cc0000; font-weight: bold; }
 #emoji-picker { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; width: 320px; max-width: calc(100vw - 16px); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 -2px 20px rgba(0,0,0,0.28); z-index: 200; flex-direction: column; overflow: hidden; }
 #emoji-picker.open { display: flex; }
 #emoji-cat-tabs { display: flex; background: #f7f7f7; border-bottom: 1px solid #eee; }
@@ -122,7 +133,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 .gif-loading { font-size: 13px; color: #aaa; padding: 16px; text-align: center; }
 .klipy-attr { font-size: 10px; color: #bbb; text-align: right; padding: 2px 6px; }
 #file-input { display: none; }
-#msg-input { width: 100%; padding: 6px 8px 6px 34px; border: 1px solid #4a7ab8; border-radius: 3px; font-size: 16px; background: rgba(240,246,255,0.95); resize: none; overflow-y: auto; max-height: 80px; line-height: 1.4; font-family: Tahoma, 'Segoe UI', sans-serif; }
+#msg-input { width: 100%; padding: 6px 34px 6px 34px; border: 1px solid #4a7ab8; border-radius: 3px; font-size: 16px; background: rgba(240,246,255,0.95); resize: none; overflow-y: auto; max-height: 80px; line-height: 1.4; font-family: Tahoma, 'Segoe UI', sans-serif; }
 #send-btn { background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: 1px solid #0a3070; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 16px; flex-shrink: 0; }
 #send-btn:hover { background: linear-gradient(to bottom, #5a8ac8, #2a5a9a); }
 #statusbar { background: linear-gradient(to bottom, #1a3a6a, #0f2a58); font-size: 13px; color: #4a6888; flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-height: 36px; padding: 4px 10px 12px; }
@@ -221,6 +232,8 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
         <input id="file-input" type="file" accept="image/*" onchange="handleFileSelect(event)" />
         <div id="input-wrap">
           <textarea id="msg-input" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <div id="waveform-wrap"><span id="rec-timer">0:00</span><canvas id="waveform"></canvas><span id="rec-cancel">&#8592; slide to cancel</span></div>
+          <button id="mic-btn" title="Voice note"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></button>
           <button id="emoji-btn" onclick="toggleEmojiPicker(event)" title="Emoji"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
         </div>
         <button id="send-btn" onclick="send()" tabindex="-1">Send</button>
@@ -347,7 +360,7 @@ function connectChat(username, tok) {
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   document.getElementById('statusbar-text').textContent = 'Connecting...';
   const SERVER = location.hostname;
-  ws = new WebSocket('ws://' + SERVER + '/ele-ws/' + encodeURIComponent(me) + '?token=' + token);
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + SERVER + '/ele-ws/' + encodeURIComponent(me) + '?token=' + token);
   connectTimer = setTimeout(() => { if (ws && ws.readyState !== WebSocket.OPEN) ws.close(); }, 10000);
   ws.onopen = () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
@@ -414,7 +427,24 @@ function renderThread(contact) {
       const line = document.createElement('div');
       line.className = 'msg-line';
       const t = normDate(cm.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-      if (cm.image_id) {
+      if (cm.image_id && cm.image_id.startsWith('audio:')) {
+        const bullet = document.createElement('span');
+        bullet.className = 'msg-bullet';
+        bullet.innerHTML = '&#9679;';
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.style.cssText = 'max-width:220px;display:block;margin-top:2px;';
+        audio.src = '/ele-api/api/image/' + cm.image_id.slice(6) + '?token=' + token;
+        const wrap = document.createElement('span');
+        wrap.className = 'msg-text';
+        wrap.appendChild(audio);
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'msg-time';
+        timeSpan.textContent = t;
+        line.appendChild(bullet);
+        line.appendChild(wrap);
+        line.appendChild(timeSpan);
+      } else if (cm.image_id) {
         const bullet = document.createElement('span');
         bullet.className = 'msg-bullet';
         bullet.innerHTML = '&#9679;';
@@ -492,7 +522,7 @@ function updateSidebar() {
   sorted.forEach(u => {
     const isOnline = onlineUsers.has(u);
     const lastMsg = threads[u] && threads[u].length > 0 ? threads[u][threads[u].length-1] : null;
-    const preview = lastMsg ? (lastMsg.image_id ? (lastMsg.isSelf ? 'You: 📷 Photo' : '📷 Photo') : (lastMsg.isSelf ? 'You: ' + lastMsg.text : lastMsg.text)) : '';
+    const preview = lastMsg ? (lastMsg.image_id ? (lastMsg.image_id.startsWith('audio:') ? (lastMsg.isSelf ? 'You: 🎤 Voice note' : '🎤 Voice note') : (lastMsg.isSelf ? 'You: 📷 Photo' : '📷 Photo')) : (lastMsg.isSelf ? 'You: ' + lastMsg.text : lastMsg.text)) : '';
     const timeStr = lastMsg ? fmtTime(normDate(lastMsg.ts)) : '';
     const uc = unread[u] || 0;
     const el = document.createElement('div');
@@ -529,6 +559,117 @@ function send(imageId) {
   inp.style.height = 'auto';
 }
 
+let mediaRecorder = null, audioChunks = [], recStream = null, recMime = '', recCancelled = false;
+let recTimerInterval = null, recStartTime = 0, recAnimFrame = null, recStartX = 0;
+
+function recUpdateTimer() {
+  const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+  const m = Math.floor(elapsed / 60);
+  const s = elapsed % 60;
+  document.getElementById('rec-timer').textContent = m + ':' + String(s).padStart(2,'0');
+}
+
+function recDrawWaveform(analyser) {
+  const canvas = document.getElementById('waveform');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth; const H = 32;
+  canvas.width = W; canvas.height = H;
+  const buf = new Uint8Array(analyser.frequencyBinCount);
+  function draw() {
+    recAnimFrame = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(buf);
+    ctx.clearRect(0, 0, W, H);
+    const bars = 40; const bw = W / bars - 1;
+    for (let i = 0; i < bars; i++) {
+      const v = buf[Math.floor(i * buf.length / bars)] / 255;
+      const h = Math.max(3, v * H);
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(i * (bw + 1), (H - h) / 2, bw, h);
+    }
+  }
+  draw();
+}
+
+async function recStart(e) {
+  if (mediaRecorder && mediaRecorder.state === 'recording') return;
+  e.preventDefault();
+  recStartX = e.touches ? e.touches[0].clientX : e.clientX;
+  recCancelled = false;
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch(err) { alert('Microphone access denied.'); return; }
+  audioChunks = [];
+  recMime = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  mediaRecorder = new MediaRecorder(recStream, recMime ? {mimeType: recMime} : {});
+  mediaRecorder.ondataavailable = ev => { if (ev.data.size > 0) audioChunks.push(ev.data); };
+  mediaRecorder.onstop = async () => {
+    recStream.getTracks().forEach(t => t.stop());
+    cancelAnimationFrame(recAnimFrame);
+    clearInterval(recTimerInterval);
+    document.getElementById('waveform-wrap').classList.remove('active');
+    document.getElementById('msg-input').style.display = '';
+    document.getElementById('emoji-btn').style.display = '';
+    document.getElementById('mic-btn').classList.remove('recording');
+    document.getElementById('rec-cancel').classList.remove('warn');
+    document.getElementById('rec-cancel').textContent = '← slide to cancel';
+    if (recCancelled) return;
+    const blob = new Blob(audioChunks, {type: recMime || 'audio/webm'});
+    if (blob.size > 2 * 1024 * 1024) { alert('Recording too large. Max 2MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const r = await fetch('/ele-api/api/upload?token=' + token, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({data: ev.target.result, mime: recMime || 'audio/webm'})
+        });
+        if (!r.ok) { alert('Upload failed.'); return; }
+        const res = await r.json();
+        send('audio:' + res.id);
+      } catch(err) { alert('Upload error.'); }
+    };
+    reader.readAsDataURL(blob);
+  };
+  mediaRecorder.start();
+  recStartTime = Date.now();
+  recTimerInterval = setInterval(recUpdateTimer, 500);
+  setTimeout(() => { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 60000);
+  document.getElementById('msg-input').style.display = 'none';
+  document.getElementById('emoji-btn').style.display = 'none';
+  document.getElementById('waveform-wrap').classList.add('active');
+  document.getElementById('mic-btn').classList.add('recording');
+  const actx = new AudioContext();
+  const src2 = actx.createMediaStreamSource(recStream);
+  const analyser = actx.createAnalyser();
+  analyser.fftSize = 128;
+  src2.connect(analyser);
+  recDrawWaveform(analyser);
+}
+
+function recMove(e) {
+  if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+  const cx = e.touches ? e.touches[0].clientX : e.clientX;
+  const dx = recStartX - cx;
+  const hint = document.getElementById('rec-cancel');
+  if (dx > 80) { hint.classList.add('warn'); hint.textContent = 'Release to cancel'; }
+  else { hint.classList.remove('warn'); hint.textContent = '← slide to cancel'; }
+}
+
+function recEnd(e) {
+  if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+  const cx = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+  if (recStartX - cx > 80) recCancelled = true;
+  mediaRecorder.stop();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('mic-btn');
+  btn.addEventListener('mousedown', recStart);
+  btn.addEventListener('touchstart', recStart, {passive: false});
+  document.addEventListener('mousemove', recMove);
+  document.addEventListener('touchmove', recMove, {passive: true});
+  document.addEventListener('mouseup', recEnd);
+  document.addEventListener('touchend', recEnd);
+});
 async function handleFileSelect(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -734,7 +875,8 @@ function buildEmojiCatTabs() {
     t.className = 'emoji-cat-tab' + (cat.id === emojiCurrentCat ? ' active' : '');
     t.textContent = cat.icon;
     t.title = cat.label;
-    t.onclick = () => {
+    t.onclick = (e) => {
+      e.stopPropagation();
       emojiCurrentCat = cat.id;
       document.getElementById('emoji-search').value = '';
       buildEmojiCatTabs();
