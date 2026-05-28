@@ -1,3 +1,9 @@
+ele-messenger (1.2.5-1) stable; urgency=low
+
+  * v1.2.5: E2E encryption ECDH+AES-GCM, HTTP->HTTPS redirect, keepalive, PIN autocomplete
+
+ -- thefangeddeity <thefangeddeity@users.noreply.github.com>  Thu, 28 May 2026 22:12:32 +0000
+
 ele-messenger (1.2.4-1) stable; urgency=low
 
   * Initial release
