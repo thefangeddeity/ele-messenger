@@ -1,0 +1,14 @@
+[Unit]
+Description=ELE Messenger Server
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=ele-messenger
+WorkingDirectory=/usr/lib/ele-messenger
+ExecStart=/usr/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
