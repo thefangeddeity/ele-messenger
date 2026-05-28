@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="ELE">
 <title>ELE Messenger</title>
 <link rel="icon" type="image/png" sizes="32x32" href="/ele/icons/ELE-messenger-favicon-32px.png">
+<link rel="shortcut icon" href="/ele/icons/ELE-messenger-favicon-32px.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/ele/icons/ELE-messenger-favicon-16px.png">
 <link rel="apple-touch-icon" href="/ele/icons/ELE-messenger.png">
 <style>
@@ -26,26 +27,34 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 #titlebar { background: linear-gradient(to bottom, #4a7ab8 0%, #2a5a9a 30%, #1a4a8a 60%, #0f3070 100%); color: #ddeeff; padding: 7px 10px; font-size: 15px; font-weight: bold; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0a2060; flex-shrink: 0; }
 #titlebar .dot { width: 9px; height: 9px; border-radius: 50%; background: #7fff00; border: 1px solid #5dc200; display: inline-block; }
 #title-name { flex: 1; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
-#signout-btn { display: none; background: rgba(255,255,255,0.12); color: #cce; border: 1px solid rgba(255,255,255,0.3); padding: 4px 12px; border-radius: 3px; cursor: pointer; font-size: 13px; }
+#signout-btn { display: none; background: rgba(255,255,255,0.12); color: #cce; border: 1px solid rgba(255,255,255,0.3); padding: 8px 14px; border-radius: 3px; cursor: pointer; font-size: 13px; }
 #signout-btn:hover { background: rgba(255,255,255,0.22); }
 #body { display: flex; flex: 1; overflow: hidden; }
 #sidebar { width: 300px; background: linear-gradient(to bottom, #1e3a6e, #162e58); border-right: 1px solid #0a2050; display: flex; flex-direction: column; flex-shrink: 0; }
-#sidebar-header { background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); padding: 8px 10px; font-size: 13px; font-weight: bold; color: #aaccee; border-bottom: 1px solid #0a2050; }
+#sidebar-header { background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); padding: 10px 14px; font-size: 16px; font-weight: bold; color: #aaccee; border-bottom: 1px solid #0a2050; }
 #convo-list { flex: 1; overflow-y: auto; }
 #sidebar-art { flex-shrink: 0; padding: 8px; text-align: center; border-top: 1px solid rgba(100,150,220,0.2); }
 #sidebar-art img { width: 100%; border-radius: 4px; display: block; }
 #sidebar-art .gpl { font-size: 11px; color: #3a5878; margin-top: 4px; }
 #new-chat-btn { background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: none; padding: 11px 14px; font-size: 15px; cursor: pointer; width: 100%; text-align: left; border-bottom: 1px solid #0a2050; }
 #new-chat-btn:hover { background: linear-gradient(to bottom, #5a8ac8, #2a5a9a); }
+#about-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 200; align-items: center; justify-content: center; }
+#about-overlay.open { display: flex; }
+#about-box { background: #1e3a6e; border: 1px solid #4a7ab8; border-radius: 8px; padding: 24px; width: 260px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
+#about-title { font-size: 18px; font-weight: bold; color: #ddeeff; }
+#about-version { font-size: 13px; color: #7a9abf; }
+#about-server { font-size: 13px; color: #7a9abf; }
+#about-license { font-size: 12px; color: #4a6888; margin-top: 4px; }
+#about-close { margin-top: 16px; background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: 1px solid #0a3070; padding: 8px 24px; border-radius: 3px; cursor: pointer; font-size: 15px; }
 #modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
 #modal-overlay.open { display: flex; }
 #modal-box { background: #1e3a6e; border: 1px solid #4a7ab8; border-radius: 6px; padding: 16px; width: 260px; max-height: 60vh; display: flex; flex-direction: column; }
 #modal-box h3 { color: #aaccee; font-size: 14px; margin-bottom: 10px; }
 #account-list { overflow-y: auto; flex: 1; }
-.account-item { padding: 8px 10px; color: #aaccee; cursor: pointer; border-radius: 3px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.account-item { padding: 12px 14px; color: #aaccee; cursor: pointer; border-radius: 3px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .account-item:hover { background: rgba(80,140,220,0.3); }
 .account-item .convo-online { margin-top: 0; }
-#modal-cancel { margin-top: 10px; background: rgba(255,255,255,0.1); color: #aaccee; border: 1px solid rgba(255,255,255,0.2); padding: 5px; border-radius: 3px; cursor: pointer; width: 100%; font-size: 13px; }
+#modal-cancel { margin-top: 10px; background: rgba(255,255,255,0.1); color: #aaccee; border: 1px solid rgba(255,255,255,0.2); padding: 10px; border-radius: 3px; cursor: pointer; width: 100%; font-size: 13px; }
 .convo { padding: 12px 14px; border-bottom: 1px solid rgba(100,150,220,0.2); cursor: pointer; display: flex; gap: 12px; align-items: flex-start; height: 80px; overflow: hidden; }
 .convo:hover { background: rgba(80,140,220,0.15); }
 .convo.active { background: rgba(80,140,220,0.25); border-left: 3px solid #6aacf0; padding-left: 7px; }
@@ -58,13 +67,13 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 .convo-preview { font-size: 13px; color: #5a7898; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px; line-height: 1.4; }
 .convo.unread .convo-preview { color: #88aacc; }
 .convo-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
-.convo-time { font-size: 10px; color: #4a6888; }
+.convo-time { font-size: 12px; color: #4a6888; }
 .convo-badge { background: #d04040; color: #fff; border-radius: 8px; padding: 0 6px; font-size: 12px; font-weight: bold; min-width: 16px; text-align: center; }
 #sidebar-drag { width: 4px; background: rgba(100,150,220,0.2); cursor: col-resize; flex-shrink: 0; transition: background 0.15s; }
 #sidebar-drag:hover { background: rgba(100,150,220,0.6); }
 #sidebar-drag.dragging { background: #4a7ab8; }
 #chatmain { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-#chat-header { background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); padding: 8px 12px; font-size: 16px; font-weight: bold; color: #aaccee; border-bottom: 1px solid #0a2050; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+#chat-header { background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); padding: 8px 12px; font-size: 16px; font-weight: bold; color: #aaccee; border-bottom: 1px solid #0a2050; display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 40px; }
 .chat-header-dot { width: 7px; height: 7px; border-radius: 50%; background: #555; border: 1px solid #444; flex-shrink: 0; }
 .chat-header-dot.on { background: #5dc200; border-color: #3a9000; }
 #messages { flex: 1; overflow-y: auto; padding: 12px 14px; background: white; display: flex; flex-direction: column; gap: 0; border-top: 3px solid #1a4a8a; border-right: 3px solid #1a4a8a; border-bottom: 3px solid #1a4a8a; }
@@ -74,7 +83,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 .who { font-weight: bold; font-size: 18px; }
 .who.me { color: #a03800; }
 .who.them { color: #0f3070; }
-.group-first-time { font-size: 12px; color: #aaa; }
+.group-first-time { font-size: 13px; color: #aaa; }
 .msg-line { font-size: 18px; line-height: 1.55; color: #222; display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
 .msg-bullet { font-size: 7px; color: #aaa; flex-shrink: 0; position: relative; top: -1px; }
 .msg-text { word-break: break-word; margin-right: 8px; }
@@ -89,7 +98,22 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 #send-btn { background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: 1px solid #0a3070; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 16px; flex-shrink: 0; }
 #send-btn:hover { background: linear-gradient(to bottom, #5a8ac8, #2a5a9a); }
 #statusbar { background: linear-gradient(to bottom, #1a3a6a, #0f2a58); font-size: 13px; color: #4a6888; flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-height: 36px; padding: 4px 10px 12px; }
-#back-btn { display: none; background: rgba(255,255,255,0.2); border: none; color: #fff; font-size: 18px; cursor: pointer; width: 32px; height: 32px; border-radius: 50%; line-height: 32px; text-align: center; padding: 0; margin-right: 8px; flex-shrink: 0; }
+#back-btn { display: none; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: #fff; font-size: 15px; cursor: pointer; height: 32px; border-radius: 3px; padding: 0 12px; margin-right: 8px; flex-shrink: 0; }
+#hamburger-btn { background: none; border: none; color: #ddeeff; font-size: 20px; cursor: pointer; padding: 4px 8px; margin-left: auto; flex-shrink: 0; }
+#hamburger-menu { display: none; position: absolute; top: 44px; right: 8px; background: #1e3a6e; border: 1px solid #4a7ab8; border-radius: 4px; z-index: 200; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+#hamburger-menu.open { display: block; }
+.hmenu-item { padding: 12px 16px; color: #aaccee; cursor: pointer; font-size: 15px; border-bottom: 1px solid rgba(100,150,220,0.2); }
+.hmenu-item:last-child { border-bottom: none; }
+.hmenu-danger { color: #ff6666; border-top: 1px solid rgba(100,150,220,0.3); margin-top: 4px; }
+.hmenu-item:hover { background: rgba(80,140,220,0.2); }
+#transport-pill { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+#transport-label { font-size: 14px; color: rgba(170,204,238,0.6); font-weight: normal; letter-spacing: 0.5px; }
+.transport-dot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex-shrink: 0; display: inline-block; }
+.transport-dot.green { background: #5dc200; border: 1px solid #3a9000; }
+.transport-dot.yellow { background: #f0c040; border: 1px solid #c09000; }
+.transport-dot.red { background: #cc3030; border: 1px solid #aa1010; }
+#scroll-btn { display: none; position: absolute; bottom: 80px; right: 16px; width: 44px; height: 44px; border-radius: 50%; background: #1a4a8a; border: 2px solid #4a7ab8; color: #ddeeff; font-size: 22px; cursor: pointer; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.4); z-index: 10; }
+#scroll-btn.visible { display: flex; }
 @media (max-width: 480px) {
   #statusbar { border-top: none; border-bottom: none; }
   #login-box { width: 90%; }
@@ -101,6 +125,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
   #body.mobile-chat #chatmain { display: flex; }
   #body.mobile-chat #back-btn { display: inline-block; }
   #app.mobile-chat #back-btn { display: inline-block; }
+  #app.mobile-chat #signout-btn { display: none !important; }
 }
 </style>
 </head>
@@ -125,14 +150,19 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 </div>
 <div id="app">
   <div id="titlebar">
-    <button id="back-btn" onclick="mobileBack()">&#8592;</button>
-    <span class="dot"></span>
+    <button id="back-btn" onclick="mobileBack()">&#8592; Back</button>
+    <img id="title-logo" src="/ele/icons/ELE-messenger-favicon-32px.png" alt="ELE" style="width:28px;height:28px;border-radius:4px;flex-shrink:0;"/>
     <span id="title-name">ELE Messenger</span>
-    <button id="signout-btn" onclick="signOut()">Sign out</button>
+    <button id="hamburger-btn" onclick="toggleMenu()">&#9776;</button>
+    <div id="hamburger-menu">
+      <div class="hmenu-item" onclick="openSettings()">Settings</div>
+      <div class="hmenu-item" onclick="openAbout()">About</div>
+      <div class="hmenu-item hmenu-danger" onclick="signOut()">Sign out</div>
+    </div>
   </div>
   <div id="body">
     <div id="sidebar">
-      <div id="sidebar-header">Conversations</div>
+      <div id="sidebar-header">Conversations<span id="transport-pill"><span id="transport-dot" class="transport-dot"></span><span id="transport-label"></span></span></div>
       <button id="new-chat-btn" onclick="openNewChat()">+ New Chat</button>
       <div id="convo-list"></div>
 
@@ -140,10 +170,11 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
     <div id="sidebar-drag"></div>
     <div id="chatmain">
       <div id="chat-header">
-        <span class="chat-header-dot" id="chat-header-dot"></span>
-        <span id="chat-header-text">Select a contact</span>
+        <span class="chat-header-dot" id="chat-header-dot" style="display:none"></span>
+        <span id="chat-header-text"></span>
       </div>
       <div id="messages"><div id="no-chat">Select a conversation to start chatting</div></div>
+      <button id="scroll-btn" onclick="scrollToBottom()">&#8595;</button>
       <div id="mobile-contacts"></div>
       <div id="inputrow">
         <button id="attach-btn" onclick="document.getElementById('file-input').click()"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aaccee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
@@ -153,7 +184,17 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
       </div>
     </div>
   </div>
-  <div id="statusbar">Connecting...</div>
+  <div id="statusbar"><span id="status-transport-dot" class="transport-dot"></span>&nbsp;<span id="statusbar-text">Connecting...</span></div>
+</div>
+<div id="about-overlay">
+  <div id="about-box">
+    <img src="/ele/icons/ELE-messenger-favicon-32px.png" style="width:48px;height:48px;border-radius:8px;margin-bottom:12px;"/>
+    <div id="about-title">ELE Messenger</div>
+    <div id="about-version"></div>
+    <div id="about-server"></div>
+    <div id="about-license">GPL 3.0</div>
+    <button id="about-close" onclick="closeAbout()">Close</button>
+  </div>
 </div>
 <div id="modal-overlay">
   <div id="modal-box">
@@ -203,7 +244,7 @@ function signOut() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
   localStorage.removeItem('ele-token');
-  document.getElementById('signout-btn').style.display = 'none';
+  document.getElementById('hamburger-btn').style.display = 'none';
   document.getElementById('pin-input').value = '';
   document.getElementById('messages').innerHTML = '<div id="no-chat">Select a conversation to start chatting</div>';
   document.getElementById('convo-list').innerHTML = '';
@@ -258,7 +299,7 @@ function connectChat(username, tok) {
   localStorage.setItem('ele-token', tok);
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-  document.getElementById('statusbar').textContent = 'Connecting...';
+  document.getElementById('statusbar-text').textContent = 'Connecting...';
   const SERVER = location.hostname;
   ws = new WebSocket('ws://' + SERVER + '/ele-ws/' + encodeURIComponent(me) + '?token=' + token);
   connectTimer = setTimeout(() => { if (ws && ws.readyState !== WebSocket.OPEN) ws.close(); }, 10000);
@@ -267,9 +308,9 @@ function connectChat(username, tok) {
     retryDelay = 3000;
     document.getElementById('login').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
-    document.getElementById('signout-btn').style.display = 'block';
+    document.getElementById('hamburger-btn').style.display = 'block'; updateTransportUI();
     document.getElementById('title-name').textContent = 'ELE Messenger \u2014 ' + me;
-    document.getElementById('statusbar').textContent = 'Connected as ' + me;
+    updateStatusbar();
     pollInterval = setInterval(pollOnline, 3000);
     pollOnline();
     fetch('/ele-api/api/history?token=' + token).then(r => r.json()).then(d => {
@@ -295,7 +336,7 @@ function connectChat(username, tok) {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     clearInterval(pollInterval);
     if (token && me) {
-      document.getElementById('statusbar').textContent = 'Reconnecting in ' + (retryDelay/1000) + 's...';
+      document.getElementById('statusbar-text').textContent = 'Reconnecting in ' + (retryDelay/1000) + 's...';
       retryTimer = setTimeout(() => connectChat(me, token), retryDelay);
       retryDelay = Math.min(retryDelay * 2, 30000);
     }
@@ -352,9 +393,19 @@ function renderThread(contact) {
     }
     box.appendChild(group);
   }
-  box.scrollTop = box.scrollHeight;
+  requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 
+function scrollToBottom() {
+  const box = document.getElementById('messages');
+  box.scrollTop = box.scrollHeight;
+}
+function updateScrollBtn() {
+  const box = document.getElementById('messages');
+  const btn = document.getElementById('scroll-btn');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  btn.classList.toggle('visible', !atBottom);
+}
 function isMobile() { return window.matchMedia('(max-width: 480px)').matches; }
 function mobileBack() {
   document.getElementById('body').classList.remove('mobile-chat'); document.getElementById('app').classList.remove('mobile-chat');
@@ -470,9 +521,48 @@ function openNewChat() {
 function closeNewChat() {
   document.getElementById('modal-overlay').classList.remove('open');
 }
+function detectTransport() {
+  const h = location.hostname;
+  if (/^100\./.test(h)) return {label: 'Tailscale', cls: 'yellow'};
+  if (/^192\.168\./.test(h) || /^10\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return {label: 'LAN', cls: 'yellow'};
+  if (h === 'localhost' || h === '127.0.0.1') return {label: 'Local', cls: 'yellow'};
+  if (/[a-zA-Z]/.test(h) && !h.includes('.local')) return {label: 'Internet', cls: 'green'};
+  return {label: 'LAN', cls: 'yellow'};
+}
+function updateTransportUI() {
+  const t = detectTransport();
+  document.querySelectorAll('.transport-dot').forEach(d => {
+    d.className = 'transport-dot ' + t.cls;
+  });
+  const lbl = document.getElementById('transport-label');
+  if (lbl) lbl.textContent = t.label;
+}
+function toggleMenu() {
+  const m = document.getElementById('hamburger-menu');
+  m.classList.toggle('open');
+}
+document.addEventListener('click', e => {
+  const menu = document.getElementById('hamburger-menu');
+  const btn = document.getElementById('hamburger-btn');
+  if (menu && !menu.contains(e.target) && e.target !== btn) menu.classList.remove('open');
+});
+function openSettings() {
+  document.getElementById('hamburger-menu').classList.remove('open');
+  alert('Settings coming soon.');
+}
+function openAbout() {
+  document.getElementById('hamburger-menu').classList.remove('open');
+  document.getElementById('about-version').textContent = 'v1.2.2';
+  document.getElementById('about-server').textContent = 'Server: ' + location.hostname + ' · ' + (document.getElementById('transport-label').textContent || 'Unknown');
+  document.getElementById('about-overlay').classList.add('open');
+}
+function closeAbout() {
+  document.getElementById('about-overlay').classList.remove('open');
+}
 function updateStatusbar() {
   const count = onlineUsers.size;
-  document.getElementById('statusbar').textContent = 'Connected as ' + me + ' · ' + count + ' contacts online';
+  document.getElementById('statusbar-text').textContent = 'Connected as ' + me + ' · ' + count + ' contacts online';
+  updateTransportUI();
 }
 function pollOnline() {
   fetch('/ele-api/online').then(r => r.json()).then(d => {
@@ -502,6 +592,8 @@ function unlockFocus() {
     delete el.dataset.prevTabindex;
   });
 }
+document.getElementById('messages').addEventListener('scroll', updateScrollBtn);
+document.getElementById('messages').addEventListener('scroll', updateScrollBtn);
 document.getElementById('msg-input').addEventListener('focus', lockFocus);
 document.getElementById('msg-input').addEventListener('blur', unlockFocus);
 document.getElementById('msg-input').addEventListener('keydown', e => {
@@ -525,6 +617,8 @@ document.getElementById('pin-input').addEventListener('keydown', e => { if (e.ke
 document.getElementById('reg-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
 document.getElementById('reg-pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
 document.getElementById('name-input').focus();
+updateTransportUI();
+
 const drag = document.getElementById('sidebar-drag');
 const sidebar = document.getElementById('sidebar');
 let dragging = false, startX = 0, startW = 0;
