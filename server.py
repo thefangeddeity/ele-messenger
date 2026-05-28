@@ -138,7 +138,7 @@ async def upload_image(data: dict, token: str = None):
     return {"id": img_id}
 
 @app.get("/api/image/{img_id}")
-async def get_image(img_id: str, token: str = None):
+async def get_image(img_id: str, token: str = None, request: Request = None):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     if img_id not in images:
@@ -147,7 +147,23 @@ async def get_image(img_id: str, token: str = None):
     data = img["data"]
     if "," in data:
         data = data.split(",", 1)[1]
-    return Response(content=base64.b64decode(data), media_type=img["mime"])
+    content = base64.b64decode(data)
+    total = len(content)
+    range_header = request.headers.get("range") if request else None
+    if range_header:
+        try:
+            start, end = range_header.replace("bytes=", "").split("-")
+            start = int(start)
+            end = int(end) if end else total - 1
+            end = min(end, total - 1)
+            chunk = content[start:end+1]
+            return Response(content=chunk, status_code=206, media_type=img["mime"],
+                headers={"Content-Range": f"bytes {start}-{end}/{total}",
+                         "Accept-Ranges": "bytes", "Content-Length": str(len(chunk))})
+        except Exception:
+            pass
+    return Response(content=content, media_type=img["mime"],
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(total)})
 
 @app.get("/api/history")
 async def get_history(token: str = None):
