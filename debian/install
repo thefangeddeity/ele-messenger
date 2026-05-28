@@ -1,0 +1,5 @@
+pkg/usr/lib/ele-messenger/* usr/lib/ele-messenger/
+pkg/var/www/ele/index.html var/www/ele/
+pkg/var/www/ele/icons/* var/www/ele/icons/
+pkg/etc/systemd/system/ele-messenger.service etc/systemd/system/
+pkg/etc/nginx/sites-available/ele-messenger etc/nginx/sites-available/

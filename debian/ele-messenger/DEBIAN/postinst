@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+useradd -r -s /sbin/nologin -d /usr/lib/ele-messenger ele-messenger 2>/dev/null || true
+mkdir -p /var/lib/ele-messenger
+chown ele-messenger:ele-messenger /var/lib/ele-messenger
+systemctl daemon-reload
+echo "==> Enable and start: systemctl enable --now ele-messenger"
+echo "==> Add to your nginx server block: include /etc/nginx/sites-available/ele-messenger;"
+echo "==> Then: systemctl reload nginx"
