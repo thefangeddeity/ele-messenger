@@ -406,14 +406,14 @@ function renderThread(contact) {
     group.className = 'msg-group';
     const header = document.createElement('div');
     header.className = 'group-header';
-    const t0 = new Date(m.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    const t0 = normDate(m.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     header.innerHTML = '<span class="who ' + (m.isSelf ? 'me' : 'them') + '">' + escHtml(m.from) + '</span>';
     group.appendChild(header);
     while (i < msgs.length && msgs[i].from === m.from) {
       const cm = msgs[i];
       const line = document.createElement('div');
       line.className = 'msg-line';
-      const t = new Date(cm.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+      const t = normDate(cm.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
       if (cm.image_id) {
         const bullet = document.createElement('span');
         bullet.className = 'msg-bullet';
@@ -468,6 +468,7 @@ function setActiveContact(u) {
   document.getElementById('msg-input').focus();
 }
 
+function normDate(ts) { return new Date(typeof ts === "string" && !ts.endsWith("Z") ? ts + "Z" : ts); }
 function fmtTime(d) {
   const now = new Date();
   if ((now - d) < 86400000 && now.getDate() === d.getDate())
@@ -481,8 +482,9 @@ function updateSidebar() {
   const mcontacts = document.getElementById('mobile-contacts');
   const allContacts = new Set([...Object.keys(threads), ...Array.from(onlineUsers).filter(u => u !== me)]);
   const sorted = Array.from(allContacts).sort((a, b) => {
-    const at = threads[a] ? new Date(threads[a][threads[a].length-1].ts) : new Date(0);
-    const bt = threads[b] ? new Date(threads[b][threads[b].length-1].ts) : new Date(0);
+    const normTs = ts => ts ? new Date(ts.endsWith("Z") ? ts : ts + "Z") : new Date(0);
+    const at = threads[a] ? normTs(threads[a][threads[a].length-1].ts) : new Date(0);
+    const bt = threads[b] ? normTs(threads[b][threads[b].length-1].ts) : new Date(0);
     return bt - at;
   });
   list.innerHTML = '';
@@ -491,7 +493,7 @@ function updateSidebar() {
     const isOnline = onlineUsers.has(u);
     const lastMsg = threads[u] && threads[u].length > 0 ? threads[u][threads[u].length-1] : null;
     const preview = lastMsg ? (lastMsg.image_id ? (lastMsg.isSelf ? 'You: 📷 Photo' : '📷 Photo') : (lastMsg.isSelf ? 'You: ' + lastMsg.text : lastMsg.text)) : '';
-    const timeStr = lastMsg ? fmtTime(new Date(lastMsg.ts)) : '';
+    const timeStr = lastMsg ? fmtTime(normDate(lastMsg.ts)) : '';
     const uc = unread[u] || 0;
     const el = document.createElement('div');
     el.className = 'convo' + (u === activeContact ? ' active' : '') + (uc > 0 ? ' unread' : '');
