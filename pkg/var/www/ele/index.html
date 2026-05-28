@@ -90,11 +90,39 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 .msg-time { font-size: 12px; color: #aaa; white-space: nowrap; flex-shrink: 0; }
 .msg-img { max-width: 220px; max-height: 220px; border-radius: 4px; display: block; margin-top: 2px; cursor: pointer; }
 #mobile-contacts { display: none; }
-#inputrow { display: flex; gap: 6px; padding: 8px; background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); border-top: 1px solid #0a2050; flex-shrink: 0; align-items: flex-end; }
+#inputrow { display: flex; gap: 6px; padding: 8px; background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); border-top: 1px solid #0a2050; flex-shrink: 0; align-items: flex-end; position: relative; }
 #attach-btn { background: rgba(255,255,255,0.12); color: #aaccee; border: 1px solid rgba(255,255,255,0.25); padding: 6px 10px; border-radius: 3px; cursor: pointer; font-size: 18px; flex-shrink: 0; line-height: 1; }
 #attach-btn:hover { background: rgba(255,255,255,0.2); }
+#input-wrap { position: relative; flex: 1; display: flex; align-items: flex-end; margin-left: 2px; }
+#emoji-btn { position: absolute; left: 4px; bottom: 5px; background: transparent; border: none; padding: 3px; cursor: pointer; line-height: 1; border-radius: 50%; }
+#emoji-btn:hover { background: rgba(0,0,0,0.08); }
+#emoji-picker { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; width: 320px; max-width: calc(100vw - 16px); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 -2px 20px rgba(0,0,0,0.28); z-index: 200; flex-direction: column; overflow: hidden; }
+#emoji-picker.open { display: flex; }
+#emoji-cat-tabs { display: flex; background: #f7f7f7; border-bottom: 1px solid #eee; }
+.emoji-cat-tab { flex: 1; padding: 8px 0; text-align: center; cursor: pointer; font-size: 15px; opacity: 0.65; border-bottom: 2px solid transparent; transition: opacity 0.1s; }
+.emoji-cat-tab.active { opacity: 1; border-bottom: 2px solid #00a884; }
+#emoji-search-wrap { padding: 6px 8px; border-bottom: 1px solid #eee; background: #fafafa; }
+#emoji-search { width: 100%; padding: 5px 8px; border: 1px solid #ddd; border-radius: 16px; font-size: 13px; outline: none; background: #fff; }
+#emoji-grid { overflow-y: auto; max-height: 240px; padding: 2px 6px 6px; }
+.emoji-section-label { font-size: 10px; color: #999; padding: 8px 2px 2px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
+.emoji-row { display: flex; flex-wrap: wrap; }
+.emoji-item { font-size: 22px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; user-select: none; }
+.emoji-item:hover { background: #f0f0f0; }
+#emoji-bottom-tabs { display: flex; border-top: 1px solid #eee; background: #f7f7f7; }
+.emoji-bottom-tab { flex: 1; padding: 9px 0; text-align: center; cursor: pointer; font-size: 13px; color: #aaa; border-top: 2px solid transparent; }
+.emoji-bottom-tab.active { color: #00a884; border-top: 2px solid #00a884; }
+#gif-grid { display: none; overflow-y: auto; max-height: 240px; padding: 4px; }
+#gif-grid.active { display: block; }
+#gif-search-wrap { display: none; padding: 6px 8px; border-bottom: 1px solid #eee; background: #fafafa; }
+#gif-search-wrap.active { display: block; }
+#gif-search { width: 100%; padding: 5px 8px; border: 1px solid #ddd; border-radius: 16px; font-size: 13px; outline: none; background: #fff; }
+.gif-results { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
+.gif-item { width: 96px; height: 72px; object-fit: cover; border-radius: 4px; cursor: pointer; display: block; background: #eee; }
+.gif-item:hover { opacity: 0.85; }
+.gif-loading { font-size: 13px; color: #aaa; padding: 16px; text-align: center; }
+.klipy-attr { font-size: 10px; color: #bbb; text-align: right; padding: 2px 6px; }
 #file-input { display: none; }
-#msg-input { flex: 1; padding: 6px 8px; border: 1px solid #4a7ab8; border-radius: 3px; font-size: 16px; background: rgba(240,246,255,0.95); resize: none; overflow-y: auto; max-height: 80px; line-height: 1.4; font-family: Tahoma, 'Segoe UI', sans-serif; }
+#msg-input { width: 100%; padding: 6px 8px 6px 34px; border: 1px solid #4a7ab8; border-radius: 3px; font-size: 16px; background: rgba(240,246,255,0.95); resize: none; overflow-y: auto; max-height: 80px; line-height: 1.4; font-family: Tahoma, 'Segoe UI', sans-serif; }
 #send-btn { background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: 1px solid #0a3070; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 16px; flex-shrink: 0; }
 #send-btn:hover { background: linear-gradient(to bottom, #5a8ac8, #2a5a9a); }
 #statusbar { background: linear-gradient(to bottom, #1a3a6a, #0f2a58); font-size: 13px; color: #4a6888; flex-shrink: 0; display: flex; align-items: center; justify-content: center; min-height: 36px; padding: 4px 10px 12px; }
@@ -177,9 +205,24 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
       <button id="scroll-btn" onclick="scrollToBottom()">&#8595;</button>
       <div id="mobile-contacts"></div>
       <div id="inputrow">
+        <div id="emoji-picker">
+          <div id="emoji-cat-tabs"></div>
+          <div id="emoji-search-wrap"><input id="emoji-search" type="text" placeholder="Search emoji" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="emojiSearch(this.value)" /></div>
+          <div id="emoji-grid"></div>
+          <div id="gif-search-wrap"><input id="gif-search" type="text" placeholder="Search GIFs..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="gifSearch(this.value)" /></div>
+          <div id="gif-grid"><div class="gif-loading">Loading...</div></div>
+          <div id="emoji-bottom-tabs">
+            <div class="emoji-bottom-tab active" onclick="switchEmojiTab(0)">&#128512; Emoji</div>
+            <div class="emoji-bottom-tab" onclick="switchEmojiTab(1)">GIF</div>
+
+          </div>
+        </div>
         <button id="attach-btn" onclick="document.getElementById('file-input').click()"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aaccee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <input id="file-input" type="file" accept="image/*" onchange="handleFileSelect(event)" />
-        <textarea id="msg-input" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+        <div id="input-wrap">
+          <textarea id="msg-input" placeholder="Type a message..." rows="1" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <button id="emoji-btn" onclick="toggleEmojiPicker(event)" title="Emoji"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
+        </div>
         <button id="send-btn" onclick="send()" tabindex="-1">Send</button>
       </div>
     </div>
@@ -223,6 +266,9 @@ function avatarColor(name) {
 }
 function initials(name) { return name.slice(0, 2).toUpperCase(); }
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function linkify(s) {
+  return escHtml(s).replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#1a6adb;text-decoration:underline;">$1</a>');
+}
 
 function showRegister() {
   document.getElementById('login-form').style.display = 'none';
@@ -386,7 +432,7 @@ function renderThread(contact) {
         line.appendChild(wrap);
         line.appendChild(timeSpan);
       } else {
-        line.innerHTML = '<span class="msg-bullet">&#9679;</span><span class="msg-text">' + escHtml(cm.text) + '</span><span class="msg-time">' + t + '</span>';
+        line.innerHTML = '<span class="msg-bullet">&#9679;</span><span class="msg-text">' + linkify(cm.text) + '</span><span class="msg-time">' + t + '</span>';
       }
       group.appendChild(line);
       i++;
@@ -642,6 +688,260 @@ document.addEventListener('mouseup', () => {
   drag.classList.remove('dragging');
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
+});
+
+// ── Emoji Picker ────────────────────────────────────────────────────────────
+const EMOJI_CATS = [
+  { id: 'recent',     icon: '\u{1F550}', label: 'Recently Used' },
+  { id: 'smileys',    icon: '\u{1F642}', label: 'Smileys & People' },
+  { id: 'animals',    icon: '\u{1F431}', label: 'Animals & Nature' },
+  { id: 'food',       icon: '\u{1F354}', label: 'Food & Drink' },
+  { id: 'activities', icon: '\u26BD',    label: 'Activities' },
+  { id: 'travel',     icon: '\u2708\uFE0F', label: 'Travel & Places' },
+  { id: 'objects',    icon: '\u{1F4A1}', label: 'Objects' },
+  { id: 'symbols',    icon: '\u2764\uFE0F', label: 'Symbols' },
+];
+const EMOJI_LIST = {
+  smileys: '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🤫 🤔 🤐 🤨 😐 😑 😶 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 😟 🙁 ☹️ 😮 😯 😲 😳 🥺 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 💩 🤡 👻 👽 🤖 👋 🤚 🖐️ ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 👂 👃 👀 👅 👄'.split(' '),
+  animals: '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🐤 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐞 🐜 🦟 🦗 🦂 🐢 🐍 🦎 🐙 🦑 🐠 🐟 🐡 🐬 🦈 🐳 🐋 🦭 🐊 🐆 🐅 🦓 🐘 🦛 🦏 🐪 🐫 🦒 🦘 🦬 🐃 🐂 🐄 🐎 🐖 🐏 🐑 🐐 🦌 🐕 🐈 🐓 🦃 🦚 🦜 🦢 🦩 🕊️ 🐇 🦝 🦡 🦦 🦥 🐁 🐀 🐿️ 🌸 🌺 🌻 🌹 🌷 🌼 🌱 🌿 🍀 🍁 🍂 🍃 🍄 🌾 🌵 🎋 🪨 🪵 🪴 🌊 🌬️ 🌈 ☁️ ⛅ ❄️ ☃️ ⛄ 💧 💦 ☔'.split(' '),
+  food: '🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🍆 🥑 🫒 🥦 🥬 🥒 🌶️ 🫑 🥕 🧄 🧅 🥔 🍠 🌽 🍄 🥚 🍳 🥘 🍲 🥣 🥗 🍿 🧂 🧈 🍱 🍚 🍛 🍜 🍝 🍞 🥐 🥖 🫓 🥨 🥯 🧀 🥞 🧇 🥓 🥩 🍗 🍖 🌭 🍔 🍟 🍕 🫔 🌮 🌯 🥙 🍰 🎂 🧁 🍮 🍭 🍬 🍫 🍩 🍪 🍦 🍧 🍨 🧃 🥤 🧋 ☕ 🫖 🍵 🍶 🍾 🍷 🍸 🍹 🍺 🍻 🥂 🥃 🫗'.split(' '),
+  activities: '⚽ 🏀 🏈 ⚾ 🥎 🎾 🏐 🏉 🥏 🎱 🪀 🏓 🏸 🥊 🥋 ⛳ 🪁 🎣 🏹 🛹 🛼 🛷 ⛸️ 🤼 🤸 🤺 ⛹️ 🤾 🏇 🧘 🏋️ 🏊 🚴 🧗 🏌️ 🏄 🚣 🎯 🎳 🎰 🧩 🎲 ♟️ 🎭 🎨 🎬 🎤 🎧 🎼 🎵 🎶 🎹 🪘 🥁 🎸 🎷 🎺 🎻 🪕 🎮 🕹️ 🎪 🤹 🎠 🎡 🎢 🎊 🎉 🎈 🎀 🎁 🎗️ 🏆 🥇 🥈 🥉'.split(' '),
+  travel: '🚗 🚕 🚙 🚌 🚎 🏎️ 🚓 🚑 🚒 🛻 🚐 🛵 🚲 🛴 ✈️ 🛩️ 🚀 🛸 🚁 ⛵ 🚢 🚤 ⚓ 🚂 🚆 🚇 🚈 🚉 🌍 🌎 🌏 🗾 🌋 🏔️ ⛰️ 🏕️ 🏖️ 🏜️ 🏝️ 🏞️ 🏟️ 🏛️ 🏗️ 🏘️ 🏠 🏡 🏢 🏥 🏦 🏨 🏩 🏪 🏫 🏬 💒 ⛪ 🕌 🛕 ⛩️ 🌁 🌉 🌃 🌆 🌇 🌌 🌠 ⛲ 🎡 🎢 🗺️'.split(' '),
+  objects: '📱 💻 ⌨️ 🖥️ 🖨️ 🖱️ 💾 💿 📀 📞 ☎️ 📺 📷 📸 📹 🎥 📽️ 📡 🔭 🔬 💊 💉 🩺 🌡️ 🧪 🧬 🔧 🔨 ⚙️ 🔩 🪛 🧲 🪜 🪣 🧹 🧺 🧻 🚪 🪟 🪑 🛋️ 🪞 🛏️ 🛁 🚽 🚿 💡 🔦 🕯️ 🎇 🎆 💎 💰 💳 💵 🔑 🗝️ 🔐 🔒 🔓 📦 📧 📨 📩 📤 📥 📜 📋 📌 📍 📎 📏 📐 ✂️ ✏️ 🖊️ 🖋️ 📝 🗓️ 📅 📆 🗑️ 📁 📂'.split(' '),
+  symbols: '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ 🕉️ ✡️ ☯️ ☦️ ⭕ ✅ ✔️ ❌ ❎ 🔱 📛 🔰 💠 🔘 🏁 🚩 🎌 🏴 🏳️ ⬆️ ↗️ ➡️ ↘️ ⬇️ ↙️ ⬅️ ↖️ ↕️ ↔️ ↩️ ↪️ 🔃 🔄 🔙 🔚 🔛 🔜 🔝 🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟥 🟧 🟨 🟩 🟦 🟪 ⬛ ⬜ 🔶 🔷 🔸 🔹 🔺 🔻 ℹ️ ♻️ ⚜️ 🔱 ❓ ❔ ❕ ❗ 💯 🔞 📵 🚫 🚳 🚭 🚯 🚱 🚷 📴 📳 🔇 🔕 🔈 🔉 🔊 📢 📣 🔔 🔕 🔋 🪫 🔌 💻'.split(' '),
+};
+let emojiPickerOpen = false;
+let emojiCurrentCat = 'smileys';
+let emojiCurrentTab = 0;
+
+function getRecentEmoji() {
+  try { return JSON.parse(localStorage.getItem('ele-emoji-recents') || '[]'); } catch { return []; }
+}
+function addRecentEmoji(e) {
+  let r = getRecentEmoji().filter(x => x !== e);
+  r.unshift(e);
+  if (r.length > 24) r = r.slice(0, 24);
+  localStorage.setItem('ele-emoji-recents', JSON.stringify(r));
+}
+
+function buildEmojiCatTabs() {
+  const tabs = document.getElementById('emoji-cat-tabs');
+  tabs.innerHTML = '';
+  EMOJI_CATS.forEach(cat => {
+    const t = document.createElement('div');
+    t.className = 'emoji-cat-tab' + (cat.id === emojiCurrentCat ? ' active' : '');
+    t.textContent = cat.icon;
+    t.title = cat.label;
+    t.onclick = () => {
+      emojiCurrentCat = cat.id;
+      document.getElementById('emoji-search').value = '';
+      buildEmojiCatTabs();
+      buildEmojiGrid(null);
+    };
+    tabs.appendChild(t);
+  });
+}
+
+function buildEmojiGrid(filter) {
+  const grid = document.getElementById('emoji-grid');
+  grid.innerHTML = '';
+  if (filter && filter.trim()) {
+    const all = [];
+    Object.values(EMOJI_LIST).forEach(arr => arr.forEach(e => { if (e && all.indexOf(e) === -1) all.push(e); }));
+    renderEmojiSection(grid, 'Results', all);
+    return;
+  }
+  if (emojiCurrentCat === 'recent') {
+    const recents = getRecentEmoji();
+    if (!recents.length) {
+      const lbl = document.createElement('div');
+      lbl.className = 'emoji-section-label';
+      lbl.textContent = 'No recent emoji yet';
+      lbl.style.padding = '16px 4px';
+      grid.appendChild(lbl);
+    } else {
+      renderEmojiSection(grid, 'Recently Used', recents);
+    }
+    return;
+  }
+  const list = EMOJI_LIST[emojiCurrentCat] || [];
+  const cat = EMOJI_CATS.find(c => c.id === emojiCurrentCat);
+  renderEmojiSection(grid, cat ? cat.label : '', list);
+}
+
+function renderEmojiSection(container, label, emojiList) {
+  const lbl = document.createElement('div');
+  lbl.className = 'emoji-section-label';
+  lbl.textContent = label;
+  container.appendChild(lbl);
+  const row = document.createElement('div');
+  row.className = 'emoji-row';
+  emojiList.forEach(e => {
+    if (!e || !e.trim()) return;
+    const item = document.createElement('div');
+    item.className = 'emoji-item';
+    item.textContent = e;
+    item.onclick = () => insertEmoji(e);
+    row.appendChild(item);
+  });
+  container.appendChild(row);
+}
+
+function insertEmoji(e) {
+  const inp = document.getElementById('msg-input');
+  const start = inp.selectionStart || inp.value.length;
+  const end = inp.selectionEnd || inp.value.length;
+  inp.value = inp.value.slice(0, start) + e + inp.value.slice(end);
+  inp.selectionStart = inp.selectionEnd = start + e.length;
+  inp.dispatchEvent(new Event('input'));
+  inp.focus();
+  addRecentEmoji(e);
+}
+
+function emojiSearch(q) {
+  buildEmojiGrid(q);
+}
+
+function switchEmojiTab(idx) {
+  emojiCurrentTab = idx;
+  document.querySelectorAll('.emoji-bottom-tab').forEach((t, i) => {
+    t.classList.toggle('active', i === idx);
+  });
+  if (idx === 1) { showGifTab(); }
+  else { hideGifTab(); buildEmojiCatTabs(); buildEmojiGrid(null); }
+}
+
+function toggleEmojiPicker(ev) {
+  ev.stopPropagation();
+  const picker = document.getElementById('emoji-picker');
+  emojiPickerOpen = !emojiPickerOpen;
+  if (emojiPickerOpen) {
+    const recents = getRecentEmoji();
+    emojiCurrentCat = recents.length ? 'recent' : 'smileys';
+    document.getElementById('emoji-search').value = '';
+    picker.classList.add('open');
+    buildEmojiCatTabs();
+    buildEmojiGrid(null);
+  } else {
+    picker.classList.remove('open');
+  }
+}
+
+
+// ── KLIPY GIF Tab ────────────────────────────────────────────────────────────
+const KLIPY_KEY = 'EFYR8jOsz9BUrixTr2XolnfgH06GQ8718o2MxYKdc1BG8wBCMzohLzjJlelSZNlr';
+const KLIPY_BASE = 'https://api.klipy.com/api/v1/' + KLIPY_KEY;
+let gifSearchTimer = null;
+
+function showGifTab() {
+  document.getElementById('emoji-grid').style.display = 'none';
+  document.getElementById('emoji-search-wrap').style.display = 'none';
+  document.getElementById('emoji-cat-tabs').style.display = 'none';
+  document.getElementById('gif-grid').classList.add('active');
+  document.getElementById('gif-search-wrap').classList.add('active');
+  document.getElementById('gif-search').value = '';
+  loadTrendingGifs();
+}
+
+function hideGifTab() {
+  document.getElementById('gif-grid').classList.remove('active');
+  document.getElementById('gif-search-wrap').classList.remove('active');
+  document.getElementById('emoji-grid').style.display = '';
+  document.getElementById('emoji-search-wrap').style.display = '';
+  document.getElementById('emoji-cat-tabs').style.display = '';
+}
+
+async function loadTrendingGifs() {
+  const grid = document.getElementById('gif-grid');
+  grid.innerHTML = '<div class="gif-loading">Loading...</div>';
+  try {
+    const r = await fetch(KLIPY_BASE + '/gifs/trending?limit=24');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    renderGifs(d.data && d.data.data ? d.data.data : []);
+  } catch(e) {
+    grid.innerHTML = '<div class="gif-loading">Failed to load GIFs</div>';
+  }
+}
+
+async function gifSearch(q) {
+  clearTimeout(gifSearchTimer);
+  if (!q.trim()) { loadTrendingGifs(); return; }
+  gifSearchTimer = setTimeout(async () => {
+    const grid = document.getElementById('gif-grid');
+    grid.innerHTML = '<div class="gif-loading">Searching...</div>';
+    try {
+      const r = await fetch(KLIPY_BASE + '/gifs/search?q=' + encodeURIComponent(q) + '&limit=24');
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      renderGifs(d.data && d.data.data ? d.data.data : []);
+    } catch(e) {
+      grid.innerHTML = '<div class="gif-loading">Search failed</div>';
+    }
+  }, 400);
+}
+
+function renderGifs(items) {
+  const grid = document.getElementById('gif-grid');
+  grid.innerHTML = '';
+  if (!items.length) {
+    grid.innerHTML = '<div class="gif-loading">No results</div>';
+    return;
+  }
+  const row = document.createElement('div');
+  row.className = 'gif-results';
+  items.forEach(item => {
+    if (item.type === 'ad') return;
+    const file = item.file || {};
+    const url = (file.sm && file.sm.webp && file.sm.webp.url) ||
+                (file.sm && file.sm.gif && file.sm.gif.url) ||
+                (file.xs && file.xs.gif && file.xs.gif.url);
+    if (!url) return;
+    const img = document.createElement('img');
+    img.className = 'gif-item';
+    img.src = url;
+    img.loading = 'lazy';
+    img.onclick = () => sendGifAsImage(url, item.id);
+    row.appendChild(img);
+  });
+  grid.appendChild(row);
+  const attr = document.createElement('div');
+  attr.className = 'klipy-attr';
+  attr.textContent = 'Powered by KLIPY';
+  grid.appendChild(attr);
+}
+
+async function sendGifAsImage(gifUrl, gifId) {
+  if (!activeContact || !ws) return;
+  try {
+    const r = await fetch(gifUrl);
+    const blob = await r.blob();
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const data = ev.target.result;
+      const res = await fetch('/ele-api/api/upload?token=' + token, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({data: data, mime: blob.type || 'image/gif'})
+      });
+      if (!res.ok) { alert('GIF upload failed.'); return; }
+      const j = await res.json();
+      send(j.id);
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) { alert('Could not send GIF.'); }
+  document.getElementById('emoji-picker').classList.remove('open');
+  emojiPickerOpen = false;
+}
+document.addEventListener('click', ev => {
+  if (!emojiPickerOpen) return;
+  const picker = document.getElementById('emoji-picker');
+  const btn = document.getElementById('emoji-btn');
+  if (picker && !picker.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) {
+    picker.classList.remove('open');
+    emojiPickerOpen = false;
+    hideGifTab();
+  }
 });
 </script>
 </body>
