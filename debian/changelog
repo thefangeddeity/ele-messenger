@@ -7,6 +7,9 @@ ele-messenger (1.2.7-1) unstable; urgency=medium
     instead of raw ciphertext.
   * nginx snippet and site file added to package.
   * avahi-daemon added to Depends.
+  * Voice note UI: tap-to-record, Stop/review/send flow, waveform,
+    decrypt placeholder, iOS keyboard fix, Tailscale label, dedup fix,
+    nginx packaging, apple-touch-icon, 100dvh viewport.
 
  -- Ron Gonzales <ron@tina>  Fri, 29 May 2026 00:15:26 +0000
 
