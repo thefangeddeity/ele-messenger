@@ -1,0 +1,7 @@
+server {
+    listen 443 ssl;
+    server_name <node>.<tailnet>.ts.net;
+    ssl_certificate /etc/nginx/certs/<node>.<tailnet>.ts.net.crt;
+    ssl_certificate_key /etc/nginx/certs/<node>.<tailnet>.ts.net.key;
+    include snippets/ele-messenger.conf;
+}
