@@ -1,3 +1,15 @@
+ele-messenger (1.2.7-1) unstable; urgency=medium
+
+  * Tailscale hostname detection — .ts.net hosts now labeled Tailscale
+    (green).
+  * History reload duplicates fixed (clear threads on ws reconnect).
+  * Decrypt failure shows '[message not on this device]' placeholder
+    instead of raw ciphertext.
+  * nginx snippet and site file added to package.
+  * avahi-daemon added to Depends.
+
+ -- Ron Gonzales <ron@tina>  Fri, 29 May 2026 00:15:26 +0000
+
 ele-messenger (1.2.5-1) stable; urgency=low
 
   * v1.2.5: E2E encryption ECDH+AES-GCM, HTTP->HTTPS redirect, keepalive, PIN autocomplete

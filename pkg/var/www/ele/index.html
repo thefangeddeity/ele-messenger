@@ -174,14 +174,14 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
     <h1>ELE Messenger</h1>
     <div id="login-error"></div>
     <div id="login-form">
-      <input id="name-input" placeholder="Name" maxlength="32" autocomplete="off" />
-      <input id="pin-input" type="password" placeholder="PIN" maxlength="4" inputmode="numeric" autocomplete="off" />
+      <input id="name-input" placeholder="Name" maxlength="32" autocomplete="username" />
+      <input id="pin-input" type="password" placeholder="PIN" maxlength="4" inputmode="numeric" autocomplete="current-password" />
       <button onclick="doLogin()">Sign In</button>
       <div class="switch"><a onclick="showRegister()">Create account</a></div>
     </div>
     <div id="register-form" style="display:none">
-      <input id="reg-name-input" placeholder="Name" maxlength="32" autocomplete="off" />
-      <input id="reg-pin-input" type="password" placeholder="PIN (4 digits)" maxlength="4" inputmode="numeric" autocomplete="off" />
+      <input id="reg-name-input" placeholder="Name" maxlength="32" autocomplete="username" />
+      <input id="reg-pin-input" type="password" placeholder="PIN (4 digits)" maxlength="4" inputmode="numeric" autocomplete="new-password" />
       <button onclick="doRegister()">Create Account</button>
       <div class="switch"><a onclick="showLogin()">Back to sign in</a></div>
     </div>
@@ -204,7 +204,6 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
       <div id="sidebar-header">Conversations<span id="transport-pill"><span id="transport-dot" class="transport-dot"></span><span id="transport-label"></span></span></div>
       <button id="new-chat-btn" onclick="openNewChat()">+ New Chat</button>
       <div id="convo-list"></div>
-
     </div>
     <div id="sidebar-drag"></div>
     <div id="chatmain">
@@ -225,7 +224,6 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
           <div id="emoji-bottom-tabs">
             <div class="emoji-bottom-tab active" onclick="switchEmojiTab(0)">&#128512; Emoji</div>
             <div class="emoji-bottom-tab" onclick="switchEmojiTab(1)">GIF</div>
-
           </div>
         </div>
         <button id="attach-btn" onclick="document.getElementById('file-input').click()"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#aaccee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
@@ -236,7 +234,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
           <button id="mic-btn" title="Voice note"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></button>
           <button id="emoji-btn" onclick="toggleEmojiPicker(event)" title="Emoji"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
         </div>
-        <button id="send-btn" onclick="send()" tabindex="-1">Send</button>
+        <button id="send-btn" tabindex="-1">Send</button>
       </div>
     </div>
   </div>
@@ -260,10 +258,15 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
   </div>
 </div>
 <script>
-let ws, me, token, pollInterval, activeContact;
+// ── State ────────────────────────────────────────────────────────────────────
+let ws, me, token, pollInterval, activeContact, keepalive;
+let myKeyPair = null, myPin = null;
+const sharedKeys = {};
 const threads = {};
 const unread = {};
 let onlineUsers = new Set();
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 const AVATAR_COLORS = [
   'linear-gradient(135deg,#4a8ad4,#1a5090)',
   'linear-gradient(135deg,#8040b0,#5020a0)',
@@ -282,7 +285,158 @@ function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 function linkify(s) {
   return escHtml(s).replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#1a6adb;text-decoration:underline;">$1</a>');
 }
+function bufToB64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function b64ToBuf(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
 
+// ── IndexedDB key store ──────────────────────────────────────────────────────
+async function openKeyDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('ele-keys', 1);
+    req.onupgradeneeded = e => {
+      e.target.result.createObjectStore('keys', {keyPath: 'username'});
+    };
+    req.onsuccess = e => res(e.target.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+async function deriveWrapKey(pin, salt) {
+  const enc = new TextEncoder().encode(pin);
+  const base = await crypto.subtle.importKey('raw', enc, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256'},
+    base,
+    {name: 'AES-GCM', length: 256},
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function saveKeyPair(username, pin, keyPair) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const wrapKey = await deriveWrapKey(pin, salt);
+  const privRaw = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
+  const wrappedPriv = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, wrapKey, privRaw);
+  const pubSpki = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+  const db = await openKeyDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('keys', 'readwrite');
+    tx.objectStore('keys').put({
+      username,
+      salt: bufToB64(salt),
+      iv: bufToB64(iv),
+      wrappedPriv: bufToB64(wrappedPriv),
+      pubSpki: bufToB64(pubSpki)
+    });
+    tx.oncomplete = res;
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+async function loadKeyPair(username, pin) {
+  const db = await openKeyDB();
+  const stored = await new Promise((res, rej) => {
+    const tx = db.transaction('keys', 'readonly');
+    const req = tx.objectStore('keys').get(username);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+  if (!stored) return null;
+  try {
+    const salt = b64ToBuf(stored.salt);
+    const iv = b64ToBuf(stored.iv);
+    const wrapKey = await deriveWrapKey(pin, salt);
+    const privRaw = await crypto.subtle.decrypt({name: 'AES-GCM', iv}, wrapKey, b64ToBuf(stored.wrappedPriv));
+    const privateKey = await crypto.subtle.importKey(
+      'pkcs8', privRaw,
+      {name: 'ECDH', namedCurve: 'P-256'},
+      false, ['deriveKey', 'deriveBits']
+    );
+    const publicKey = await crypto.subtle.importKey(
+      'spki', b64ToBuf(stored.pubSpki),
+      {name: 'ECDH', namedCurve: 'P-256'},
+      true, []
+    );
+    return {privateKey, publicKey};
+  } catch {
+    return null; // wrong PIN or corrupt data
+  }
+}
+
+// Crypto
+async function generateAndRegisterKeys(username, pin) {
+  const keyPair = await crypto.subtle.generateKey(
+    {name: 'ECDH', namedCurve: 'P-256'}, true, ['deriveKey', 'deriveBits']
+  );
+  await saveKeyPair(username, pin, keyPair);
+  const pubSpki = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+  await fetch('/ele-api/api/pubkey?token=' + token, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pubkey: bufToB64(pubSpki)})
+  });
+  return keyPair;
+}
+
+async function ensureSharedKey(contact) {
+  if (sharedKeys[contact]) return sharedKeys[contact];
+  if (!myKeyPair) return null;
+  try {
+    const r = await fetch('/ele-api/api/pubkey/' + encodeURIComponent(contact) + '?token=' + token);
+    if (!r.ok) return null;
+    const {pubkey} = await r.json();
+    const contactPubKey = await crypto.subtle.importKey(
+      'spki', b64ToBuf(pubkey),
+      {name: 'ECDH', namedCurve: 'P-256'}, false, []
+    );
+    const shared = await crypto.subtle.deriveKey(
+      {name: 'ECDH', public: contactPubKey},
+      myKeyPair.privateKey,
+      {name: 'AES-GCM', length: 256},
+      false, ['encrypt', 'decrypt']
+    );
+    sharedKeys[contact] = shared;
+    return shared;
+  } catch {
+    return null;
+  }
+}
+
+async function encryptMsg(contact, plaintext) {
+  const key = await ensureSharedKey(contact);
+  if (!key) return plaintext;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    {name: 'AES-GCM', iv}, key, new TextEncoder().encode(plaintext)
+  );
+  return bufToB64(iv.buffer) + ':' + bufToB64(ct);
+}
+
+async function decryptMsg(contact, ciphertext) {
+  if (!ciphertext) return '';
+  // Pre-E2E plaintext messages pass through unchanged
+  if (!ciphertext.includes(':')) return ciphertext;
+  try {
+    const key = await ensureSharedKey(contact);
+    if (!key) return '[message not on this device]';
+    const colonIdx = ciphertext.indexOf(':');
+    const iv = b64ToBuf(ciphertext.slice(0, colonIdx));
+    const ct = b64ToBuf(ciphertext.slice(colonIdx + 1));
+    const pt = await crypto.subtle.decrypt({name: 'AES-GCM', iv}, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch {
+    return '[message not on this device]'; // graceful fallback
+  }
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
 function showRegister() {
   document.getElementById('login-form').style.display = 'none';
   document.getElementById('register-form').style.display = 'block';
@@ -299,10 +453,12 @@ function setError(msg) { document.getElementById('login-error').textContent = ms
 
 function signOut() {
   clearInterval(pollInterval);
+  if (keepalive) { clearInterval(keepalive); keepalive = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  myKeyPair = null; myPin = null;
+  Object.keys(sharedKeys).forEach(k => delete sharedKeys[k]);
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
-  localStorage.removeItem('ele-token');
   document.getElementById('hamburger-btn').style.display = 'none';
   document.getElementById('pin-input').value = '';
   document.getElementById('messages').innerHTML = '<div id="no-chat">Select a conversation to start chatting</div>';
@@ -310,7 +466,13 @@ function signOut() {
   Object.keys(threads).forEach(k => delete threads[k]);
   Object.keys(unread).forEach(k => delete unread[k]);
   onlineUsers.clear();
-  document.getElementById('name-input').focus();
+  const saved = localStorage.getItem('ele-username');
+  if (saved) {
+    document.getElementById('name-input').value = saved;
+    document.getElementById('pin-input').focus();
+  } else {
+    document.getElementById('name-input').focus();
+  }
 }
 
 async function doLogin() {
@@ -324,6 +486,7 @@ async function doLogin() {
     });
     if (!r.ok) { setError('Invalid name or PIN.'); return; }
     const data = await r.json();
+    myPin = pin;
     localStorage.setItem('ele-username', username);
     connectChat(data.username, data.token);
   } catch(e) { setError('Server unreachable.'); }
@@ -346,46 +509,73 @@ async function doRegister() {
       body: JSON.stringify({username, pin})
     });
     const data = await lr.json();
+    myPin = pin;
     localStorage.setItem('ele-username', username);
     connectChat(data.username, data.token);
   } catch(e) { setError('Server unreachable.'); }
 }
 
+// ── Connection ───────────────────────────────────────────────────────────────
 let retryDelay = 3000, retryTimer = null, connectTimer = null;
 
 function connectChat(username, tok) {
   me = username; token = tok;
-  localStorage.setItem('ele-token', tok);
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   document.getElementById('statusbar-text').textContent = 'Connecting...';
   const SERVER = location.hostname;
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + SERVER + '/ele-ws/' + encodeURIComponent(me) + '?token=' + token);
   connectTimer = setTimeout(() => { if (ws && ws.readyState !== WebSocket.OPEN) ws.close(); }, 10000);
-  ws.onopen = () => {
+  ws.onopen = async () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     retryDelay = 3000;
+    // Load or generate keypair
+    let kp = await loadKeyPair(me, myPin);
+    if (!kp) {
+      kp = await generateAndRegisterKeys(me, myPin);
+    } else {
+      // Re-register pubkey in case server was reset
+      try {
+        const pubSpki = await crypto.subtle.exportKey('spki', kp.publicKey);
+        await fetch('/ele-api/api/pubkey?token=' + token, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({pubkey: bufToB64(pubSpki)})
+        });
+      } catch {}
+    }
+    myKeyPair = kp;
+    keepalive = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'ping'}));
+    }, 30000);
     document.getElementById('login').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
-    document.getElementById('hamburger-btn').style.display = 'block'; updateTransportUI();
+    document.getElementById('hamburger-btn').style.display = 'block';
+    updateTransportUI();
     document.getElementById('title-name').textContent = 'ELE Messenger \u2014 ' + me;
     updateStatusbar();
     pollInterval = setInterval(pollOnline, 3000);
     pollOnline();
-    fetch('/ele-api/api/history?token=' + token).then(r => r.json()).then(d => {
-      (d.history || []).forEach(m => {
+    Object.keys(threads).forEach(k => delete threads[k]);
+    // Load history with decryption
+    try {
+      const r = await fetch('/ele-api/api/history?token=' + token);
+      const data = await r.json();
+      for (const m of (data.history || [])) {
         const contact = m.from === me ? m.to : m.from;
-        addMessage(contact, m.from, m.message, m.image_id || null, m.from === me, m.timestamp);
-      });
+        const text = await decryptMsg(contact, m.message);
+        addMessage(contact, m.from, text, m.image_id || null, m.from === me, m.timestamp);
+      }
       updateSidebar();
-    }).catch(() => {});
+    } catch {}
   };
-  ws.onmessage = (e) => {
+  ws.onmessage = async (e) => {
     const d = JSON.parse(e.data);
+    if (d.type === 'pong') return;
     if (d.from === me) return;
     if (d.from === 'server') return;
     const contact = d.from;
-    addMessage(contact, d.from, d.message, d.image_id || null, false);
+    const text = await decryptMsg(contact, d.message);
+    addMessage(contact, d.from, text, d.image_id || null, false);
     if (contact !== activeContact) {
       unread[contact] = (unread[contact] || 0) + 1;
     }
@@ -393,6 +583,7 @@ function connectChat(username, tok) {
   };
   ws.onclose = () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+    if (keepalive) { clearInterval(keepalive); keepalive = null; }
     clearInterval(pollInterval);
     if (token && me) {
       document.getElementById('statusbar-text').textContent = 'Reconnecting in ' + (retryDelay/1000) + 's...';
@@ -402,6 +593,7 @@ function connectChat(username, tok) {
   };
 }
 
+// ── Messages ─────────────────────────────────────────────────────────────────
 function addMessage(contact, from, text, image_id, isSelf, ts) {
   if (!threads[contact]) threads[contact] = [];
   threads[contact].push({from, text, image_id, isSelf, ts: ts || new Date().toISOString()});
@@ -419,7 +611,6 @@ function renderThread(contact) {
     group.className = 'msg-group';
     const header = document.createElement('div');
     header.className = 'group-header';
-    const t0 = normDate(m.ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     header.innerHTML = '<span class="who ' + (m.isSelf ? 'me' : 'them') + '">' + escHtml(m.from) + '</span>';
     group.appendChild(header);
     while (i < msgs.length && msgs[i].from === m.from) {
@@ -462,7 +653,7 @@ function renderThread(contact) {
         line.appendChild(wrap);
         line.appendChild(timeSpan);
       } else {
-        line.innerHTML = '<span class="msg-bullet">&#9679;</span><span class="msg-text">' + linkify(cm.text) + '</span><span class="msg-time">' + t + '</span>';
+        line.innerHTML = '<span class="msg-bullet">&#9679;</span><span class="msg-text">' + linkify(cm.text || '') + '</span><span class="msg-time">' + t + '</span>';
       }
       group.appendChild(line);
       i++;
@@ -484,17 +675,24 @@ function updateScrollBtn() {
 }
 function isMobile() { return window.matchMedia('(max-width: 480px)').matches; }
 function mobileBack() {
-  document.getElementById('body').classList.remove('mobile-chat'); document.getElementById('app').classList.remove('mobile-chat');
+  document.getElementById('body').classList.remove('mobile-chat');
+  document.getElementById('app').classList.remove('mobile-chat');
 }
 function setActiveContact(u) {
   activeContact = u;
   delete unread[u];
   updateSidebar();
+  // Pre-derive shared key in background
+  if (myKeyPair) ensureSharedKey(u).catch(() => {});
   const dot = document.getElementById('chat-header-dot');
   dot.className = 'chat-header-dot' + (onlineUsers.has(u) ? ' on' : '');
+  dot.style.display = '';
   document.getElementById('chat-header-text').textContent = 'Chat with ' + u;
   renderThread(u);
-  if (isMobile()) { document.getElementById('body').classList.add('mobile-chat'); document.getElementById('app').classList.add('mobile-chat'); }
+  if (isMobile()) {
+    document.getElementById('body').classList.add('mobile-chat');
+    document.getElementById('app').classList.add('mobile-chat');
+  }
   document.getElementById('msg-input').focus();
 }
 
@@ -533,7 +731,7 @@ function updateSidebar() {
       '<div class="convo-avatar" style="background:' + avatarColor(u) + '">' + escHtml(initials(u)) + '</div>' +
       '<div class="convo-info">' +
         '<div class="convo-name">' + escHtml(u) + '</div>' +
-        '<div class="convo-preview">' + escHtml(preview.slice(0,40)) + '</div>' +
+        '<div class="convo-preview">' + escHtml((preview || '').slice(0,40)) + '</div>' +
       '</div>' +
       '<div class="convo-meta">' +
         '<span class="convo-time">' + timeStr + '</span>' +
@@ -548,10 +746,14 @@ function updateSidebar() {
   });
 }
 
-function send(imageId) {
+async function send(imageId) {
   const msg = document.getElementById('msg-input').value.trim();
   if (!activeContact || (!msg && !imageId) || !ws) return;
-  ws.send(JSON.stringify({to: activeContact, message: msg, image_id: imageId || null}));
+  let payload = msg;
+  if (msg && myKeyPair) {
+    payload = await encryptMsg(activeContact, msg);
+  }
+  ws.send(JSON.stringify({to: activeContact, message: payload, image_id: imageId || null}));
   addMessage(activeContact, me, msg, imageId || null, true);
   updateSidebar();
   const inp = document.getElementById('msg-input');
@@ -559,6 +761,7 @@ function send(imageId) {
   inp.style.height = 'auto';
 }
 
+// ── Voice notes ──────────────────────────────────────────────────────────────
 let mediaRecorder = null, audioChunks = [], recStream = null, recMime = '', recCancelled = false;
 let recTimerInterval = null, recStartTime = 0, recAnimFrame = null, recStartX = 0;
 
@@ -670,6 +873,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('mouseup', recEnd);
   document.addEventListener('touchend', recEnd);
 });
+
+// ── File upload ──────────────────────────────────────────────────────────────
 async function handleFileSelect(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -692,6 +897,7 @@ async function handleFileSelect(e) {
   e.target.value = '';
 }
 
+// ── New chat / contacts ──────────────────────────────────────────────────────
 function openNewChat() {
   fetch('/ele-api/api/accounts?token=' + token).then(r => r.json()).then(d => {
     const list = document.getElementById('account-list');
@@ -710,9 +916,12 @@ function openNewChat() {
 function closeNewChat() {
   document.getElementById('modal-overlay').classList.remove('open');
 }
+
+// ── Transport / UI ───────────────────────────────────────────────────────────
 function detectTransport() {
   const h = location.hostname;
-  if (/^100\./.test(h)) return {label: 'Tailscale', cls: 'yellow'};
+  if (/^100\./.test(h)) return {label: 'Tailscale', cls: 'green'};
+  if (/\.ts\.net$/.test(h)) return {label: 'Tailscale', cls: 'green'};
   if (/^192\.168\./.test(h) || /^10\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return {label: 'LAN', cls: 'yellow'};
   if (h === 'localhost' || h === '127.0.0.1') return {label: 'Local', cls: 'yellow'};
   if (/[a-zA-Z]/.test(h) && !h.includes('.local')) return {label: 'Internet', cls: 'green'};
@@ -741,7 +950,7 @@ function openSettings() {
 }
 function openAbout() {
   document.getElementById('hamburger-menu').classList.remove('open');
-  document.getElementById('about-version').textContent = 'v1.2.2';
+  document.getElementById('about-version').textContent = 'v1.2.7';
   document.getElementById('about-server').textContent = 'Server: ' + location.hostname + ' · ' + (document.getElementById('transport-label').textContent || 'Unknown');
   document.getElementById('about-overlay').classList.add('open');
 }
@@ -764,6 +973,7 @@ function pollOnline() {
   }).catch(() => {});
 }
 
+// ── Input behaviour ──────────────────────────────────────────────────────────
 const FOCUSABLE = 'a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 function lockFocus() {
   document.querySelectorAll(FOCUSABLE).forEach(el => {
@@ -782,13 +992,12 @@ function unlockFocus() {
   });
 }
 document.getElementById('messages').addEventListener('scroll', updateScrollBtn);
-document.getElementById('messages').addEventListener('scroll', updateScrollBtn);
 document.getElementById('msg-input').addEventListener('focus', lockFocus);
 document.getElementById('msg-input').addEventListener('blur', unlockFocus);
 document.getElementById('msg-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
-    const isMobile = window.matchMedia('(max-width: 480px)').matches;
-    if (!isMobile) { e.preventDefault(); send(); }
+    const isMob = window.matchMedia('(max-width: 480px)').matches;
+    if (!isMob) { e.preventDefault(); send(); }
   }
 });
 document.getElementById('msg-input').addEventListener('input', () => {
@@ -796,18 +1005,24 @@ document.getElementById('msg-input').addEventListener('input', () => {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 80) + 'px';
 });
+document.getElementById('send-btn').addEventListener('click', () => send());
 
-const saved = localStorage.getItem('ele-username');
-if (saved) document.getElementById('name-input').value = saved;
-const savedToken = localStorage.getItem('ele-token');
-if (savedToken && saved) setTimeout(() => connectChat(saved, savedToken), 1000);
+// ── Init ─────────────────────────────────────────────────────────────────────
 document.getElementById('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('reg-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
 document.getElementById('reg-pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
-document.getElementById('name-input').focus();
+
+const saved = localStorage.getItem('ele-username');
+if (saved) {
+  document.getElementById('name-input').value = saved;
+  document.getElementById('pin-input').focus();
+} else {
+  document.getElementById('name-input').focus();
+}
 updateTransportUI();
 
+// ── Sidebar drag ─────────────────────────────────────────────────────────────
 const drag = document.getElementById('sidebar-drag');
 const sidebar = document.getElementById('sidebar');
 let dragging = false, startX = 0, startW = 0;
@@ -833,7 +1048,7 @@ document.addEventListener('mouseup', () => {
   document.body.style.userSelect = '';
 });
 
-// ── Emoji Picker ────────────────────────────────────────────────────────────
+// ── Emoji Picker ─────────────────────────────────────────────────────────────
 const EMOJI_CATS = [
   { id: 'recent',     icon: '\u{1F550}', label: 'Recently Used' },
   { id: 'smileys',    icon: '\u{1F642}', label: 'Smileys & People' },
@@ -971,8 +1186,7 @@ function toggleEmojiPicker(ev) {
   }
 }
 
-
-// ── KLIPY GIF Tab ────────────────────────────────────────────────────────────
+// ── KLIPY GIF Tab ─────────────────────────────────────────────────────────────
 const KLIPY_KEY = 'EFYR8jOsz9BUrixTr2XolnfgH06GQ8718o2MxYKdc1BG8wBCMzohLzjJlelSZNlr';
 const KLIPY_BASE = 'https://api.klipy.com/api/v1/' + KLIPY_KEY;
 let gifSearchTimer = null;
@@ -1077,6 +1291,7 @@ async function sendGifAsImage(gifUrl, gifId) {
   document.getElementById('emoji-picker').classList.remove('open');
   emojiPickerOpen = false;
 }
+
 document.addEventListener('click', ev => {
   if (!emojiPickerOpen) return;
   const picker = document.getElementById('emoji-picker');

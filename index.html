@@ -425,14 +425,14 @@ async function decryptMsg(contact, ciphertext) {
   if (!ciphertext.includes(':')) return ciphertext;
   try {
     const key = await ensureSharedKey(contact);
-    if (!key) return ciphertext;
+    if (!key) return '[message not on this device]';
     const colonIdx = ciphertext.indexOf(':');
     const iv = b64ToBuf(ciphertext.slice(0, colonIdx));
     const ct = b64ToBuf(ciphertext.slice(colonIdx + 1));
     const pt = await crypto.subtle.decrypt({name: 'AES-GCM', iv}, key, ct);
     return new TextDecoder().decode(pt);
   } catch {
-    return ciphertext; // graceful fallback
+    return '[message not on this device]'; // graceful fallback
   }
 }
 
@@ -555,6 +555,7 @@ function connectChat(username, tok) {
     updateStatusbar();
     pollInterval = setInterval(pollOnline, 3000);
     pollOnline();
+    Object.keys(threads).forEach(k => delete threads[k]);
     // Load history with decryption
     try {
       const r = await fetch('/ele-api/api/history?token=' + token);
@@ -919,7 +920,8 @@ function closeNewChat() {
 // ── Transport / UI ───────────────────────────────────────────────────────────
 function detectTransport() {
   const h = location.hostname;
-  if (/^100\./.test(h)) return {label: 'Tailscale', cls: 'yellow'};
+  if (/^100\./.test(h)) return {label: 'Tailscale', cls: 'green'};
+  if (/\.ts\.net$/.test(h)) return {label: 'Tailscale', cls: 'green'};
   if (/^192\.168\./.test(h) || /^10\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return {label: 'LAN', cls: 'yellow'};
   if (h === 'localhost' || h === '127.0.0.1') return {label: 'Local', cls: 'yellow'};
   if (/[a-zA-Z]/.test(h) && !h.includes('.local')) return {label: 'Internet', cls: 'green'};
@@ -948,7 +950,7 @@ function openSettings() {
 }
 function openAbout() {
   document.getElementById('hamburger-menu').classList.remove('open');
-  document.getElementById('about-version').textContent = 'v1.2.5';
+  document.getElementById('about-version').textContent = 'v1.2.7';
   document.getElementById('about-server').textContent = 'Server: ' + location.hostname + ' · ' + (document.getElementById('transport-label').textContent || 'Unknown');
   document.getElementById('about-overlay').classList.add('open');
 }

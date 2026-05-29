@@ -1,0 +1,7 @@
+server {
+    listen 443 ssl;
+    server_name tina.humboldt-polaris.ts.net;
+    ssl_certificate /etc/nginx/certs/tina.humboldt-polaris.ts.net.crt;
+    ssl_certificate_key /etc/nginx/certs/tina.humboldt-polaris.ts.net.key;
+    include snippets/ele-messenger.conf;
+}

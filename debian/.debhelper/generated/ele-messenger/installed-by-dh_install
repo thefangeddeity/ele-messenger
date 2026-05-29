@@ -1,9 +1,0 @@
-./pkg/usr/lib/ele-messenger/config.json
-./pkg/usr/lib/ele-messenger/server.py
-./pkg/var/www/ele/index.html
-./pkg/var/www/ele/icons/ELE-messenger-coverart.png
-./pkg/var/www/ele/icons/ELE-messenger-favicon-16px.png
-./pkg/var/www/ele/icons/ELE-messenger-favicon-32px.png
-./pkg/var/www/ele/icons/ELE-messenger.png
-./pkg/etc/systemd/system/ele-messenger.service
-./pkg/etc/nginx/sites-available/ele-messenger
