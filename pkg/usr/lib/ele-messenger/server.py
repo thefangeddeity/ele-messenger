@@ -1,13 +1,14 @@
-# ELE Messenger - server.py v1.1.0
+# ELE Messenger - server.py v1.2.5
 import json, os, secrets, asyncio, uuid, sqlite3, base64
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "config.json")
-DB_PATH = os.path.join(BASE, "ele.db")
+_DATA_DIR = "/var/lib/ele-messenger" if os.path.isdir("/var/lib/ele-messenger") else BASE
+DB_PATH = os.path.join(_DATA_DIR, "ele.db")
 
 def load_config():
     try:
@@ -37,6 +38,12 @@ def init_db():
                 message TEXT NOT NULL DEFAULT '',
                 image_id TEXT,
                 timestamp TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pubkeys (
+                username TEXT PRIMARY KEY,
+                pubkey TEXT NOT NULL
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
@@ -138,7 +145,7 @@ async def upload_image(data: dict, token: str = None):
     return {"id": img_id}
 
 @app.get("/api/image/{img_id}")
-async def get_image(img_id: str, token: str = None):
+async def get_image(img_id: str, token: str = None, request: Request = None):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     if img_id not in images:
@@ -147,7 +154,23 @@ async def get_image(img_id: str, token: str = None):
     data = img["data"]
     if "," in data:
         data = data.split(",", 1)[1]
-    return Response(content=base64.b64decode(data), media_type=img["mime"])
+    content = base64.b64decode(data)
+    total = len(content)
+    range_header = request.headers.get("range") if request else None
+    if range_header:
+        try:
+            start, end = range_header.replace("bytes=", "").split("-")
+            start = int(start)
+            end = int(end) if end else total - 1
+            end = min(end, total - 1)
+            chunk = content[start:end+1]
+            return Response(content=chunk, status_code=206, media_type=img["mime"],
+                headers={"Content-Range": f"bytes {start}-{end}/{total}",
+                         "Accept-Ranges": "bytes", "Content-Length": str(len(chunk))})
+        except Exception:
+            pass
+    return Response(content=content, media_type=img["mime"],
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(total)})
 
 @app.get("/api/history")
 async def get_history(token: str = None):
@@ -166,6 +189,29 @@ async def get_history(token: str = None):
                 "image_id": r["image_id"], "timestamp": r["timestamp"]} for r in rows]
     return {"history": history}
 
+@app.post("/api/pubkey")
+async def set_pubkey(data: dict, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    pubkey = data.get("pubkey", "").strip()
+    if not pubkey:
+        raise HTTPException(400, "pubkey required")
+    with get_db() as conn:
+        conn.execute("INSERT OR REPLACE INTO pubkeys (username, pubkey) VALUES (?, ?)", (username, pubkey))
+        conn.commit()
+    return {"status": "ok"}
+
+@app.get("/api/pubkey/{username}")
+async def get_pubkey(username: str, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    with get_db() as conn:
+        row = conn.execute("SELECT pubkey FROM pubkeys WHERE username = ?", (username,)).fetchone()
+    if not row:
+        raise HTTPException(404, "pubkey not found")
+    return {"pubkey": row["pubkey"]}
+
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     token = websocket.query_params.get("token")
@@ -178,6 +224,9 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     try:
         while True:
             data = await websocket.receive_json()
+            if data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
             target = data.get("to")
             message = data.get("message") or ""
             image_id = data.get("image_id")
