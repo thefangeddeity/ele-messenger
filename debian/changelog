@@ -1,3 +1,9 @@
+ele-messenger (1.2.8-1) UNRELEASED; urgency=medium
+
+  * Fix DB_PATH in server.py; add avahi mDNS service file
+
+ -- Ron Gonzales <ron@tina>  Sat, 30 May 2026 05:38:19 +0000
+
 ele-messenger (1.2.7-1) unstable; urgency=medium
 
   * Tailscale hostname detection — .ts.net hosts now labeled Tailscale
