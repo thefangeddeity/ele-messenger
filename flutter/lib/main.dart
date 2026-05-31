@@ -1,0 +1,610 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const kBg          = Color(0xFF0F2A58);
+const kSidebarDark = Color(0xFF162E58);
+const kBarTop      = Color(0xFF4A7AB8);
+const kBarBot      = Color(0xFF0F3070);
+const kInputTop    = Color(0xFF2A4A7A);
+const kInputBot    = Color(0xFF1A3A6A);
+const kAccent      = Color(0xFF4A7AB8);
+const kTextPrimary = Color(0xFFDDEEFF);
+const kTextMuted   = Color(0xFF5A7898);
+const kOnline      = Color(0xFF5DC200);
+const kBorder      = Color(0xFF0A2050);
+const kMsgBg       = Colors.white;
+const kMsgBorder   = Color(0xFF1A4A8A);
+
+const List<Color> kAvatarColors = [
+  Color(0xFF4A8AD4), Color(0xFF8040B0), Color(0xFF408040),
+  Color(0xFFB06030), Color(0xFFB03050), Color(0xFF208080),
+];
+Color avatarColor(String name) {
+  int h = 0;
+  for (final c in name.codeUnits) h = (h * 31 + c) & 0xffff;
+  return kAvatarColors[h % kAvatarColors.length];
+}
+
+const kServerHost = 'tina.humboldt-polaris.ts.net';
+String get kApiBase => 'https://$kServerHost/ele-api';
+String get kWsBase  => 'wss://$kServerHost/ele-ws';
+
+String detectTransport(String host) {
+  if (host.contains('.ts.net') || host.startsWith('100.')) return 'Tailscale';
+  if (host == 'localhost' || host == '127.0.0.1') return 'Local';
+  if (host.endsWith('.local')) return 'LAN';
+  final parts = host.split('.');
+  if (parts.length >= 2 && RegExp(r'^\d+$').hasMatch(parts[0])) {
+    final first = int.tryParse(parts[0]) ?? 0;
+    if (first == 10 || first == 172 || first == 192) return 'LAN';
+  }
+  return 'Internet';
+}
+Color transportColor(String t) {
+  if (t == 'Tailscale' || t == 'Internet') return kOnline;
+  if (t == 'LAN' || t == 'Local') return const Color(0xFFF0C040);
+  return const Color(0xFFCC3030);
+}
+
+String formatTime(String ts) {
+  try {
+    final dt = DateTime.parse(ts.endsWith('Z') ? ts : '${ts}Z').toLocal();
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour < 12 ? 'AM' : 'PM';
+    return '$h:$m $ampm';
+  } catch (_) { return ''; }
+}
+String formatConvoTime(String ts) {
+  try {
+    final dt = DateTime.parse(ts.endsWith('Z') ? ts : '${ts}Z').toLocal();
+    final now = DateTime.now();
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) return formatTime(ts);
+    return '${dt.month}/${dt.day}';
+  } catch (_) { return ''; }
+}
+
+void main() => runApp(const ELEApp());
+
+class ELEApp extends StatefulWidget {
+  const ELEApp({super.key});
+  @override
+  State<ELEApp> createState() => _ELEAppState();
+}
+
+class _ELEAppState extends State<ELEApp> {
+  Widget _home = const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+  @override
+  void initState() {
+    super.initState();
+    _tryAutologin();
+  }
+
+  Future<void> _tryAutologin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final username = prefs.getString('username');
+    if (token != null && username != null) {
+      try {
+        final res = await http.get(
+          Uri.parse('$kApiBase/api/accounts?token=$token'),
+        ).timeout(const Duration(seconds: 6));
+        if (res.statusCode == 200) {
+          setState(() => _home = ChatShell(username: username, token: token));
+          return;
+        }
+    } catch (_) {}
+    }
+    setState(() => _home = const LoginScreen());
+  }
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'ELE Messenger', debugShowCheckedModeBanner: false,
+    theme: ThemeData(fontFamily: 'Segoe UI',
+      colorScheme: const ColorScheme.dark(surface: kBg),
+      scaffoldBackgroundColor: kBg),
+    home: _home);
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+  @override State<LoginScreen> createState() => _LoginScreenState();
+}
+class _LoginScreenState extends State<LoginScreen> {
+  final _userCtrl = TextEditingController();
+  final _pinCtrl  = TextEditingController();
+  bool _isRegister = false, _loading = false;
+  String _error = '';
+
+  Future<void> _submit() async {
+    final username = _userCtrl.text.trim(), pin = _pinCtrl.text.trim();
+    if (username.isEmpty || pin.isEmpty) return;
+    if (_isRegister && (pin.length != 4 || int.tryParse(pin) == null)) {
+      setState(() => _error = 'PIN must be 4 digits.'); return;
+    }
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final res = await http.post(
+        Uri.parse('$kApiBase/api/${_isRegister ? "register" : "login"}'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'pin': pin}));
+      if (res.statusCode == 409) { setState(() { _error = 'Name already taken.'; _loading = false; }); return; }
+      if (res.statusCode == 401) { setState(() { _error = 'Invalid name or PIN.'; _loading = false; }); return; }
+      if (res.statusCode != 200) { setState(() { _error = 'Server error.'; _loading = false; }); return; }
+      final data = jsonDecode(res.body);
+    if (!mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('token', data['token'] as String);
+    await prefs.setString('username', data['username'] as String);
+    Navigator.pushReplacement(context, MaterialPageRoute(
+      builder: (_) => ChatShell(username: data['username'], token: data['token'])));
+    } catch (_) { setState(() { _error = 'Server unreachable.'; _loading = false; }); }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(body: Container(
+    decoration: const BoxDecoration(gradient: LinearGradient(
+      begin: Alignment.topLeft, end: Alignment.bottomRight,
+      colors: [kBg, Color(0xFF1E3A6E)])),
+    child: Center(child: Container(width: 280, padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(color: const Color(0xF5F0F6FF),
+        border: Border.all(color: kAccent), borderRadius: BorderRadius.circular(6)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('ELE Messenger', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF0F3070))),
+        const SizedBox(height: 16),
+        _field(_userCtrl, 'Username', false), const SizedBox(height: 10),
+        _field(_pinCtrl, 'PIN', true), const SizedBox(height: 6),
+        if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Color(0xFFCC0000), fontSize: 13)),
+        const SizedBox(height: 10),
+        SizedBox(width: double.infinity, child: ElevatedButton(
+          onPressed: _loading ? null : _submit,
+          style: ElevatedButton.styleFrom(backgroundColor: kAccent, foregroundColor: kTextPrimary,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+          child: _loading
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+            : Text(_isRegister ? 'Register' : 'Sign In', style: const TextStyle(fontSize: 16)))),
+        const SizedBox(height: 10),
+        GestureDetector(
+          onTap: () => setState(() { _isRegister = !_isRegister; _error = ''; }),
+          child: Text(_isRegister ? 'Already have an account? Sign in' : 'New user? Register',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF1A4880), decoration: TextDecoration.underline))),
+      ])))));
+
+  Widget _field(TextEditingController ctrl, String label, bool obscure) => TextField(
+    controller: ctrl, obscureText: obscure,
+    keyboardType: obscure ? TextInputType.number : TextInputType.text,
+    inputFormatters: obscure ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)] : [],
+    onSubmitted: (_) => _submit(),
+    decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(color: Color(0xFF4A7AB8)),
+      border: const OutlineInputBorder(),
+      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: kAccent, width: 2)),
+      filled: true, fillColor: Colors.white.withOpacity(0.95),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+    style: const TextStyle(fontSize: 16, color: Colors.black87));
+}
+
+class ChatShell extends StatefulWidget {
+  final String username, token;
+  const ChatShell({super.key, required this.username, required this.token});
+  @override State<ChatShell> createState() => _ChatShellState();
+}
+class _ChatShellState extends State<ChatShell> {
+  WebSocketChannel? _ws;
+  final Map<String, List<Map<String,dynamic>>> _threads = {};
+  final Map<String, int> _unread = {};
+  List<String> _contacts = [];
+  Set<String> _online = {};
+  String? _active;
+  bool _wsConnected = false, _showScrollBtn = false;
+  String _transport = '';
+  int _onlineCount = 0;
+  Timer? _onlineTimer, _pingTimer;
+  final _msgCtrl = TextEditingController();
+  final _scroll  = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _transport = detectTransport(kServerHost);
+    _loadContacts();
+    _loadAllHistory();
+    _connectWs();
+    _scroll.addListener(() {
+      final atBottom = _scroll.hasClients && _scroll.position.maxScrollExtent - _scroll.offset < 80;
+      if (!atBottom != _showScrollBtn) setState(() => _showScrollBtn = !atBottom);
+    });
+    _onlineTimer = Timer.periodic(const Duration(seconds: 30), (_) => _loadOnline());
+  }
+
+  Future<void> _loadContacts() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBase/api/accounts?token=${widget.token}'));
+      if (res.statusCode == 200) {
+        final all = List<String>.from(jsonDecode(res.body)['accounts']);
+        setState(() => _contacts = all.where((u) => u != widget.username).toList());
+      }
+    } catch (_) {}
+    _loadOnline();
+  }
+
+  Future<void> _loadOnline() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBase/online'));
+      if (res.statusCode == 200) {
+        final online = Set<String>.from(jsonDecode(res.body)['online']);
+        setState(() { _online = online; _onlineCount = online.where((u) => u != widget.username).length; });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadAllHistory() async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBase/api/history?token=${widget.token}'));
+      if (res.statusCode == 200) {
+        final all = (jsonDecode(res.body)['history'] as List).cast<Map<String, dynamic>>();
+        final Map<String, List<Map<String, dynamic>>> grouped = {};
+        for (final m in all) {
+          final other = m['from'] == widget.username ? m['to'] as String : m['from'] as String;
+          grouped.putIfAbsent(other, () => []).add({
+            'from': m['from'] as String, 'to': m['to'] as String,
+            'message': m['message'] as String, 'ts': m['timestamp'] as String,
+          });
+        }
+        setState(() => _threads.addAll(grouped));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadHistory(String contact) async {
+    try {
+      final res = await http.get(Uri.parse('$kApiBase/api/history?token=${widget.token}&user=$contact'));
+      if (res.statusCode == 200) {
+      final msgs = (jsonDecode(res.body)['history'] as List).map((m) => {
+        'from': m['from'] as String, 'to': m['to'] as String, 'message': m['message'] as String, 'ts': m['timestamp'] as String,
+        }).toList();
+        setState(() => _threads[contact] = msgs);
+      }
+    } catch (_) {}
+  }
+
+  void _connectWs() {
+    try {
+      _ws = WebSocketChannel.connect(Uri.parse('$kWsBase/${widget.username}?token=${widget.token}'));
+      setState(() => _wsConnected = true);
+      _ws!.stream.listen((data) {
+        final msg = jsonDecode(data) as Map<String, dynamic>;
+        if (msg['type'] == 'pong') return;
+        final from = msg['from'] as String?;
+        if (from == null) return;
+        final entry = {'from': from, 'message': msg['message'] ?? '', 'ts': DateTime.now().toUtc().toIso8601String()};
+        setState(() {
+          _threads.putIfAbsent(from, () => []).add(entry);
+          if (_active != from) _unread[from] = (_unread[from] ?? 0) + 1;
+        });
+        if (_active == from) _scrollBottom();
+      },
+      onDone: () { setState(() => _wsConnected = false); Future.delayed(const Duration(seconds: 3), _connectWs); },
+      onError: (_) { setState(() => _wsConnected = false); Future.delayed(const Duration(seconds: 3), _connectWs); });
+      _pingTimer?.cancel();
+      _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        try { _ws?.sink.add(jsonEncode({'type': 'ping'})); } catch (_) {}
+      });
+    } catch (_) {
+      setState(() => _wsConnected = false);
+      Future.delayed(const Duration(seconds: 5), _connectWs);
+    }
+  }
+
+  void _send() {
+    final msg = _msgCtrl.text.trim();
+    if (msg.isEmpty || _active == null || _ws == null) return;
+    _ws!.sink.add(jsonEncode({'to': _active, 'message': msg}));
+    final entry = {'from': widget.username, 'message': msg, 'ts': DateTime.now().toUtc().toIso8601String()};
+    setState(() => _threads.putIfAbsent(_active!, () => []).add(entry));
+    _msgCtrl.clear();
+    _scrollBottom();
+  }
+
+  void _scrollBottom() {
+    Future.delayed(const Duration(milliseconds: 80), () {
+      if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+    });
+  }
+
+  Future<void> _selectContact(String name) async {
+    setState(() { _active = name; _unread.remove(name); });
+    if (!_threads.containsKey(name)) await _loadHistory(name);
+    _scrollBottom();
+  }
+
+  Future<void> _clearChat() async {
+    if (_active == null) return;
+    try {
+      await http.delete(Uri.parse('$kApiBase/api/history/${_active!}?token=${widget.token}'));
+      setState(() => _threads[_active!] = []);
+    } catch (_) {}
+  }
+
+  List<String> get _activeContacts =>
+    _contacts.where((c) => _threads.containsKey(c) && _threads[c]!.isNotEmpty).toList();
+
+  @override
+  void dispose() {
+    _ws?.sink.close(); _msgCtrl.dispose(); _scroll.dispose();
+    _onlineTimer?.cancel(); _pingTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(body: Column(children: [
+    _buildTitlebar(),
+    Expanded(child: Row(children: [_buildSidebar(), _buildChat()])),
+    _buildStatusBar(),
+  ]));
+
+  Widget _buildTitlebar() => Container(
+    height: 40,
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+        colors: [kBarTop, Color(0xFF2A5A9A), Color(0xFF1A4A8A), kBarBot]),
+      border: Border(bottom: BorderSide(color: Color(0xFF0A2060)))),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    child: Row(children: [
+      Container(width: 9, height: 9, decoration: BoxDecoration(
+        color: _wsConnected ? kOnline : const Color(0xFF888888), shape: BoxShape.circle,
+        border: Border.all(color: _wsConnected ? kOnline : const Color(0xFF666666)))),
+      const SizedBox(width: 8),
+      Expanded(child: Text('ELE Messenger \u2014 ${widget.username}',
+        style: const TextStyle(color: kTextPrimary, fontSize: 15, fontWeight: FontWeight.bold,
+          shadows: [Shadow(color: Colors.black45, offset: Offset(0,1), blurRadius: 3)]))),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.menu, color: kTextPrimary),
+        color: const Color(0xFF1E3A6E),
+        onSelected: (val) async {
+          if (val == 'signout') {
+            _ws?.sink.close();
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.clear();
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+          }
+          else if (val == 'clearchat' && _active != null) await _clearChat();
+          else if (val == 'about') _showAbout();
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'clearchat', child: Text('Clear chat', style: TextStyle(color: Color(0xFFFF6666), fontSize: 14))),
+          const PopupMenuItem(value: 'about', child: Text('About', style: TextStyle(color: kTextPrimary, fontSize: 14))),
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'signout', child: Text('Sign out', style: TextStyle(color: kTextPrimary, fontSize: 14))),
+        ]),
+    ]));
+
+  void _showAbout() => showDialog(context: context, builder: (_) => AlertDialog(
+    backgroundColor: const Color(0xFF1E3A6E),
+    title: const Text('ELE Messenger', style: TextStyle(color: kTextPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+    content: const Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('v1.3.0', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
+      SizedBox(height: 4),
+      Text(kServerHost, style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
+      SizedBox(height: 4),
+      Text('GPL 3.0', style: TextStyle(color: Color(0xFF4A6888), fontSize: 12)),
+    ]),
+    actions: [TextButton(onPressed: () => Navigator.pop(context),
+      child: const Text('Close', style: TextStyle(color: kAccent)))],
+  ));
+
+  Widget _buildSidebar() {
+    final contacts = _activeContacts;
+    final tColor = transportColor(_transport);
+    return Container(
+      width: 260,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Color(0xFF1E3A6E), kSidebarDark]),
+        border: Border(right: BorderSide(color: kBorder))),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(colors: [Color(0xFF2A4A7A), Color(0xFF1A3A6A)]),
+            border: Border(bottom: BorderSide(color: kBorder))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Conversations', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
+            const SizedBox(height: 2),
+            Row(children: [
+              Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(color: tColor, shape: BoxShape.circle)),
+              Text(_transport, style: const TextStyle(fontSize: 11, color: Color(0xFFAACCEE), letterSpacing: 0.3)),
+            ]),
+          ])),
+        GestureDetector(onTap: _showNewChatModal,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: const BoxDecoration(color: Color(0xFF1A4A8A),
+              border: Border(bottom: BorderSide(color: Color(0xFF0A2050)))),
+            child: const Row(children: [
+              Icon(Icons.add, color: kTextPrimary, size: 16), SizedBox(width: 6),
+              Text('New Chat', style: TextStyle(fontSize: 14, color: kTextPrimary))]))),
+        Expanded(child: ListView.builder(
+          itemCount: contacts.length,
+          itemBuilder: (_, i) => _buildConvoRow(contacts[i]))),
+      ]));
+  }
+
+  void _showNewChatModal() {
+    final available = _contacts.where((c) => !(_threads.containsKey(c) && _threads[c]!.isNotEmpty)).toList();
+    showDialog(context: context, builder: (_) => AlertDialog(
+      backgroundColor: const Color(0xFF1E3A6E),
+      title: const Text('New Chat', style: TextStyle(color: Color(0xFFAACCEE), fontSize: 15)),
+      content: SizedBox(width: 220, child: available.isEmpty
+        ? const Text('No other users found.', style: TextStyle(color: Color(0xFF5A7898)))
+        : ListView.builder(shrinkWrap: true, itemCount: available.length, itemBuilder: (_, i) {
+            final name = available[i];
+            return ListTile(
+              leading: CircleAvatar(backgroundColor: avatarColor(name),
+                child: Text(name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+              title: Text(name, style: const TextStyle(color: Color(0xFFAACCEE), fontSize: 14)),
+              trailing: Container(width: 8, height: 8, decoration: BoxDecoration(
+                color: _online.contains(name) ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
+              onTap: () { Navigator.pop(context); _selectContact(name); });
+          })),
+      actions: [TextButton(onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel', style: TextStyle(color: kAccent)))]));
+  }
+
+  Widget _buildConvoRow(String name) {
+    final isActive = _active == name;
+    final isOnline = _online.contains(name);
+    final unread   = _unread[name] ?? 0;
+    final msgs     = _threads[name] ?? [];
+    final preview  = msgs.isNotEmpty ? msgs.last['message'] as String : '';
+    final ts       = msgs.isNotEmpty ? formatConvoTime(msgs.last['ts'] as String) : '';
+    return GestureDetector(
+      onTap: () => _selectContact(name),
+      child: Container(
+        height: 72,
+        padding: EdgeInsets.only(left: isActive ? 11 : 14, right: 14, top: 10, bottom: 10),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0x406080DC) : Colors.transparent,
+          border: Border(
+            left: BorderSide(color: isActive ? const Color(0xFF6AACF0) : Colors.transparent, width: 3),
+            bottom: const BorderSide(color: Color(0x33648CCC)))),
+        child: Row(children: [
+          Container(width: 8, height: 8, margin: const EdgeInsets.only(right: 8, top: 2),
+            decoration: BoxDecoration(
+              color: isOnline ? kOnline : const Color(0xFF555555), shape: BoxShape.circle,
+              border: Border.all(color: isOnline ? const Color(0xFF3A9000) : const Color(0xFF444444)))),
+          CircleAvatar(radius: 20, backgroundColor: avatarColor(name),
+            child: Text(name[0].toUpperCase(),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(name, style: TextStyle(fontSize: 14,
+              color: unread > 0 ? kTextPrimary : const Color(0xFFAACCEE),
+              fontWeight: unread > 0 ? FontWeight.bold : FontWeight.normal)),
+            if (preview.isNotEmpty) Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: unread > 0 ? const Color(0xFF88AACC) : kTextMuted)),
+          ])),
+          Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+            if (ts.isNotEmpty) Text(ts, style: const TextStyle(fontSize: 11, color: Color(0xFF4A6888))),
+            if (unread > 0) ...[const SizedBox(height: 4),
+              Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(color: const Color(0xFFD04040), borderRadius: BorderRadius.circular(8)),
+                child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)))],
+          ]),
+        ])));
+  }
+
+  Widget _buildChat() => Expanded(child: Column(children: [
+    _buildChatHeader(),
+    Expanded(child: Stack(children: [
+      _buildMessages(),
+      if (_showScrollBtn) Positioned(bottom: 12, right: 12,
+        child: GestureDetector(
+          onTap: () => _scroll.animateTo(_scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200), curve: Curves.easeOut),
+          child: Container(width: 40, height: 40,
+            decoration: BoxDecoration(color: const Color(0xFF1A4A8A), shape: BoxShape.circle,
+              border: Border.all(color: kAccent, width: 2),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 6)]),
+            child: const Icon(Icons.arrow_downward, color: kTextPrimary, size: 20)))),
+    ])),
+    if (_active != null) _buildInputRow(),
+  ]));
+
+  Widget _buildChatHeader() => Container(
+    height: 40, padding: const EdgeInsets.symmetric(horizontal: 12),
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(colors: [Color(0xFF2A4A7A), Color(0xFF1A3A6A)]),
+      border: Border(bottom: BorderSide(color: kBorder))),
+    child: Row(children: [
+      if (_active != null) ...[
+        Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 8),
+          decoration: BoxDecoration(
+            color: _online.contains(_active!) ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
+        Text('Chat with ${_active!}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
+      ]]));
+
+  Widget _buildMessages() {
+    if (_active == null) return Container(color: kMsgBg,
+      child: const Center(child: Text('Select a conversation to start chatting',
+        style: TextStyle(color: Color(0xFF9AB0CC), fontSize: 15, fontStyle: FontStyle.italic))));
+    final msgs = _threads[_active!] ?? [];
+    final groups = <Map<String, dynamic>>[];
+    for (final m in msgs) {
+      final from = m['from'] as String;
+      if (groups.isEmpty || groups.last['from'] != from) {
+        groups.add({'from': from, 'messages': <Map<String,dynamic>>[m]});
+      } else {
+        (groups.last['messages'] as List<Map<String,dynamic>>).add(m);
+      }
+    }
+    return Container(
+      decoration: const BoxDecoration(color: kMsgBg,
+        border: Border(top: BorderSide(color: kMsgBorder, width: 3),
+                       right: BorderSide(color: kMsgBorder, width: 3))),
+      child: ListView.builder(
+        controller: _scroll, padding: const EdgeInsets.all(12),
+        itemCount: groups.length,
+        itemBuilder: (_, i) {
+          final g = groups[i];
+          final from = g['from'] as String;
+          final isMe = from == widget.username;
+          final groupMsgs = g['messages'] as List<Map<String,dynamic>>;
+          return Padding(padding: const EdgeInsets.only(bottom: 14), child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(from, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16,
+                color: isMe ? const Color(0xFFA03800) : const Color(0xFF0F3070))),
+              const SizedBox(height: 2),
+              ...groupMsgs.map((m) => Padding(padding: const EdgeInsets.only(top: 1),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+                  const Text('\u00b7', style: TextStyle(fontSize: 8, color: Color(0xFFAAAAAA))),
+                  const SizedBox(width: 6),
+                  Text(m['message'] as String,
+                    style: const TextStyle(fontSize: 16, color: Color(0xFF222222), height: 1.5)),
+                  const SizedBox(width: 4),
+                  Text(formatTime(m['ts'] as String), style: const TextStyle(fontSize: 12, color: Color(0xFFAAAAAA))),
+                ]))),
+            ]));
+        }));
+  }
+
+  Widget _buildInputRow() => Container(
+    padding: const EdgeInsets.all(8),
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(colors: [kInputTop, kInputBot]),
+      border: Border(top: BorderSide(color: kBorder))),
+    child: Row(children: [
+      Expanded(child: TextField(controller: _msgCtrl, onSubmitted: (_) => _send(),
+        style: const TextStyle(fontSize: 16, color: Colors.black87),
+        decoration: InputDecoration(filled: true, fillColor: Colors.white.withOpacity(0.95),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(3), borderSide: BorderSide.none),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), isDense: true))),
+      const SizedBox(width: 8),
+      ElevatedButton(onPressed: _send,
+        style: ElevatedButton.styleFrom(backgroundColor: kAccent, foregroundColor: kTextPrimary,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+        child: const Text('Send', style: TextStyle(fontSize: 15))),
+    ]));
+
+  Widget _buildStatusBar() => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF1A3A6A), kBg])),
+    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 5),
+        decoration: BoxDecoration(color: transportColor(_transport), shape: BoxShape.circle)),
+      Text(_wsConnected
+        ? 'Connected as ${widget.username} \u00b7 $_onlineCount contact${_onlineCount == 1 ? "" : "s"} online'
+        : 'Reconnecting...',
+        style: const TextStyle(fontSize: 12, color: Color(0xFF4A6888))),
+    ]));
+}
