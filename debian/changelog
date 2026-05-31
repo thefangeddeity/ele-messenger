@@ -1,3 +1,14 @@
+ele-messenger (1.3.0-1) stable; urgency=medium
+
+  * Conversation-based schema with group chat ready DB
+  * Default plaintext messaging; secret chat opt-in per conversation
+  * Clear chat with live update to other party
+  * Hide input row when no chat selected
+  * Autologin via localStorage token
+  * Hamburger menu reordered; sign out unstyled
+
+ -- thefangeddeity <thefangeddeity@github.com>  Sun, 31 May 2026 00:00:00 +0000
+
 ele-messenger (1.2.10-1) stable; urgency=medium
 
   * Add 512px icon link for Firefox shortcuts
