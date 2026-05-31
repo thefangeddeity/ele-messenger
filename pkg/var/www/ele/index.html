@@ -91,7 +91,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 .msg-time { font-size: 12px; color: #aaa; white-space: nowrap; flex-shrink: 0; }
 .msg-img { max-width: 220px; max-height: 220px; border-radius: 4px; display: block; margin-top: 2px; cursor: pointer; }
 #mobile-contacts { display: none; }
-#inputrow { display: flex; gap: 6px; padding: 8px; background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); border-top: 1px solid #0a2050; flex-shrink: 0; align-items: flex-end; position: relative; }
+#inputrow { display: none; gap: 6px; padding: 8px; background: linear-gradient(to bottom, #2a4a7a, #1a3a6a); border-top: 1px solid #0a2050; flex-shrink: 0; align-items: flex-end; position: relative; }
 #attach-btn { background: rgba(255,255,255,0.12); color: #aaccee; border: 1px solid rgba(255,255,255,0.25); padding: 6px 10px; border-radius: 3px; cursor: pointer; font-size: 18px; flex-shrink: 0; line-height: 1; }
 #attach-btn:hover { background: rgba(255,255,255,0.2); }
 #input-wrap { position: relative; flex: 1; display: flex; align-items: flex-end; margin-left: 2px; }
@@ -206,9 +206,11 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
     <span id="title-name">ELE Messenger</span>
     <button id="hamburger-btn" onclick="toggleMenu()">&#9776;</button>
     <div id="hamburger-menu">
+      <div id="hmenu-secret" class="hmenu-item" onclick="toggleSecretChat()" style="display:none">Start secret chat</div>
+      <div id="hmenu-delete" class="hmenu-item hmenu-danger" onclick="deleteChat()" style="display:none">Clear chat</div>
       <div class="hmenu-item" onclick="openSettings()">Settings</div>
       <div class="hmenu-item" onclick="openAbout()">About</div>
-      <div class="hmenu-item hmenu-danger" onclick="signOut()">Sign out</div>
+      <div class="hmenu-item" onclick="signOut()">Sign out</div>
     </div>
   </div>
   <div id="body">
@@ -222,6 +224,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
       <div id="chat-header">
         <span class="chat-header-dot" id="chat-header-dot" style="display:none"></span>
         <span id="chat-header-text"></span>
+        <span id="chat-header-lock" style="display:none;margin-left:4px;font-size:14px;" title="Secret chat">&#128274;</span>
       </div>
       <div id="messages"><div id="no-chat">Select a conversation to start chatting</div></div>
       <button id="scroll-btn" onclick="scrollToBottom()">&#8595;</button>
@@ -276,6 +279,7 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 let ws, me, token, pollInterval, activeContact, keepalive;
 let myKeyPair = null, myPin = null;
 const sharedKeys = {};
+const secretChats = new Set();
 const threads = {};
 const unread = {};
 let onlineUsers = new Set();
@@ -471,6 +475,7 @@ function signOut() {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   myKeyPair = null; myPin = null;
   Object.keys(sharedKeys).forEach(k => delete sharedKeys[k]);
+  localStorage.removeItem('ele-token');
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
   document.getElementById('hamburger-btn').style.display = 'none';
@@ -502,6 +507,7 @@ async function doLogin() {
     const data = await r.json();
     myPin = pin;
     localStorage.setItem('ele-username', username);
+    localStorage.setItem('ele-token', data.token);
     connectChat(data.username, data.token);
   } catch(e) { setError('Server unreachable.'); }
 }
@@ -525,6 +531,7 @@ async function doRegister() {
     const data = await lr.json();
     myPin = pin;
     localStorage.setItem('ele-username', username);
+    localStorage.setItem('ele-token', data.token);
     connectChat(data.username, data.token);
   } catch(e) { setError('Server unreachable.'); }
 }
@@ -570,13 +577,15 @@ function connectChat(username, tok) {
     pollInterval = setInterval(pollOnline, 3000);
     pollOnline();
     Object.keys(threads).forEach(k => delete threads[k]);
-    // Load history with decryption
+    // Load history
     try {
       const r = await fetch('/ele-api/api/history?token=' + token);
       const data = await r.json();
       for (const m of (data.history || [])) {
         const contact = m.from === me ? m.to : m.from;
-        const text = await decryptMsg(contact, m.message);
+        if (m.secret) secretChats.add(contact);
+        let text = m.message;
+        if (m.secret && m.message) { try { text = await decryptMsg(contact, m.message); } catch { text = '[message not on this device]'; } }
         addMessage(contact, m.from, text, m.image_id || null, m.from === me, m.timestamp);
       }
       updateSidebar();
@@ -588,7 +597,21 @@ function connectChat(username, tok) {
     if (d.from === me) return;
     if (d.from === 'server') return;
     const contact = d.from;
-    const text = await decryptMsg(contact, d.message);
+    if (d.type === 'secret_changed') {
+      if (d.secret) secretChats.add(d.with); else secretChats.delete(d.with);
+      updateSidebar();
+      if (activeContact === d.with) updateChatHeader();
+      return;
+    }
+    if (d.type === 'chat_cleared') {
+      const other = d.with;
+      delete threads[other];
+      if (activeContact === other) renderThread(other);
+      updateSidebar();
+      return;
+    }
+    let text = d.message;
+    if (d.secret && d.message) { try { text = await decryptMsg(contact, d.message); } catch { text = '[message not on this device]'; } }
     addMessage(contact, d.from, text, d.image_id || null, false);
     if (contact !== activeContact) {
       unread[contact] = (unread[contact] || 0) + 1;
@@ -702,6 +725,10 @@ function setActiveContact(u) {
   dot.className = 'chat-header-dot' + (onlineUsers.has(u) ? ' on' : '');
   dot.style.display = '';
   document.getElementById('chat-header-text').textContent = 'Chat with ' + u;
+  document.getElementById('hmenu-secret').style.display = '';
+  document.getElementById('hmenu-delete').style.display = '';
+  document.getElementById('inputrow').style.display = 'flex';
+  updateChatHeader();
   renderThread(u);
   if (isMobile()) {
     document.getElementById('body').classList.add('mobile-chat');
@@ -744,7 +771,7 @@ function updateSidebar() {
       '<div class="convo-online' + (isOnline ? ' on' : '') + '"></div>' +
       '<div class="convo-avatar" style="background:' + avatarColor(u) + '">' + escHtml(initials(u)) + '</div>' +
       '<div class="convo-info">' +
-        '<div class="convo-name">' + escHtml(u) + '</div>' +
+        '<div class="convo-name">' + escHtml(u) + (secretChats.has(u) ? ' <span style="font-size:12px;">&#128274;</span>' : '') + '</div>' +
         '<div class="convo-preview">' + escHtml((preview || '').slice(0,40)) + '</div>' +
       '</div>' +
       '<div class="convo-meta">' +
@@ -764,10 +791,11 @@ async function send(imageId) {
   const msg = document.getElementById('msg-input').value.trim();
   if (!activeContact || (!msg && !imageId) || !ws) return;
   let payload = msg;
-  if (msg && myKeyPair) {
+  const isSecret = secretChats.has(activeContact);
+  if (msg && isSecret && myKeyPair) {
     payload = await encryptMsg(activeContact, msg);
   }
-  ws.send(JSON.stringify({to: activeContact, message: payload, image_id: imageId || null}));
+  ws.send(JSON.stringify({to: activeContact, message: payload, image_id: imageId || null, secret: isSecret}));
   addMessage(activeContact, me, msg, imageId || null, true);
   updateSidebar();
   const inp = document.getElementById('msg-input');
@@ -1014,6 +1042,48 @@ document.addEventListener('click', e => {
   const btn = document.getElementById('hamburger-btn');
   if (menu && !menu.contains(e.target) && e.target !== btn) menu.classList.remove('open');
 });
+function updateChatHeader() {
+  if (!activeContact) return;
+  const isSecret = secretChats.has(activeContact);
+  const lock = document.getElementById('chat-header-lock');
+  if (lock) lock.style.display = isSecret ? 'inline' : 'none';
+  const hmenuSecret = document.getElementById('hmenu-secret');
+  if (hmenuSecret) hmenuSecret.textContent = isSecret ? 'End secret chat' : 'Start secret chat';
+}
+async function toggleSecretChat() {
+  document.getElementById('hamburger-menu').classList.remove('open');
+  if (!activeContact) return;
+  const isSecret = secretChats.has(activeContact);
+  const newSecret = !isSecret;
+  try {
+    await fetch('/ele-api/api/secret/' + activeContact + '?token=' + token, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({secret: newSecret})
+    });
+    if (newSecret) secretChats.add(activeContact); else secretChats.delete(activeContact);
+    updateChatHeader();
+    updateSidebar();
+  } catch(e) { alert('Failed to update secret chat status.'); }
+}
+async function deleteChat() {
+  document.getElementById('hamburger-menu').classList.remove('open');
+  if (!activeContact) return;
+  if (!confirm('Delete all messages with ' + activeContact + '? This cannot be undone.')) return;
+  try {
+    await fetch('/ele-api/api/history/' + activeContact + '?token=' + token, {method: 'DELETE'});
+    delete threads[activeContact];
+    activeContact = null;
+    document.getElementById('inputrow').style.display = 'none';
+    document.getElementById('chat-header-text').textContent = '';
+    document.getElementById('chat-header-dot').style.display = 'none';
+    document.getElementById('chat-header-lock').style.display = 'none';
+    document.getElementById('hmenu-secret').style.display = 'none';
+    document.getElementById('hmenu-delete').style.display = 'none';
+    document.getElementById('messages').innerHTML = '';
+    updateSidebar();
+  } catch(e) { alert('Failed to delete chat.'); }
+}
 function openSettings() {
   document.getElementById('hamburger-menu').classList.remove('open');
   alert('Settings coming soon.');
@@ -1064,6 +1134,7 @@ function unlockFocus() {
 document.getElementById('messages').addEventListener('scroll', updateScrollBtn);
 document.getElementById('msg-input').addEventListener('focus', lockFocus);
 document.getElementById('msg-input').addEventListener('focus', () => setTimeout(scrollToBottom, 300));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (document.activeElement === document.getElementById('msg-input')) scrollToBottom(); });
 document.getElementById('msg-input').addEventListener('blur', unlockFocus);
 document.getElementById('msg-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1085,7 +1156,25 @@ document.getElementById('reg-name-input').addEventListener('keydown', e => { if 
 document.getElementById('reg-pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
 
 const saved = localStorage.getItem('ele-username');
-if (saved) {
+const savedToken = localStorage.getItem('ele-token');
+if (savedToken && saved) {
+  document.getElementById('login').style.display = 'none';
+  fetch('/ele-api/api/accounts?token=' + savedToken)
+    .then(r => {
+      if (r.ok) { connectChat(saved, savedToken); }
+      else {
+        localStorage.removeItem('ele-token');
+        document.getElementById('login').style.display = 'flex';
+        document.getElementById('name-input').value = saved;
+        document.getElementById('pin-input').focus();
+      }
+    })
+    .catch(() => {
+      document.getElementById('login').style.display = 'flex';
+      document.getElementById('name-input').value = saved;
+      document.getElementById('pin-input').focus();
+    });
+} else if (saved) {
   document.getElementById('name-input').value = saved;
   document.getElementById('pin-input').focus();
 } else {

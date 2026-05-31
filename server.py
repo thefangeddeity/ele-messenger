@@ -1,4 +1,4 @@
-# ELE Messenger - server.py v1.2.5
+# ELE Messenger - server.py v1.3.0
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
@@ -22,32 +22,115 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def convo_id(user_a, user_b):
+    """Deterministic conversation ID for a pair of users."""
+    return ":".join(sorted([user_a, user_b]))
+
 def init_db():
     with get_db() as conn:
+        # Accounts
         conn.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
                 username TEXT PRIMARY KEY,
                 pin TEXT NOT NULL
             )
         """)
+
+        # Conversations (group-chat ready)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                secret INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # Conversation members
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_members (
+                conversation_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, username)
+            )
+        """)
+
+        # New messages table with conversation_id
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
                 from_user TEXT NOT NULL,
-                to_user TEXT NOT NULL,
                 message TEXT NOT NULL DEFAULT '',
                 image_id TEXT,
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                secret INTEGER NOT NULL DEFAULT 0
             )
         """)
+
+        # Pubkeys
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pubkeys (
                 username TEXT PRIMARY KEY,
                 pubkey TEXT NOT NULL
             )
         """)
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_convo_members ON conversation_members(username)")
+
+        # --- Migration from old schema ---
+        # Check if old messages table has to_user column
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        if "to_user" in cols:
+            print("Migrating old messages schema to conversation-based schema...")
+            old_messages = conn.execute(
+                "SELECT id, from_user, to_user, message, image_id, timestamp FROM messages"
+            ).fetchall()
+
+            # Recreate messages table without to_user
+            conn.execute("ALTER TABLE messages RENAME TO messages_old")
+            conn.execute("""
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    from_user TEXT NOT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    image_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    secret INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
+
+            # Migrate old messages
+            for row in old_messages:
+                cid = convo_id(row["from_user"], row["to_user"])
+                # Ensure conversation exists
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, 0)",
+                    (cid,)
+                )
+                # Ensure members exist
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                    (cid, row["from_user"])
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                    (cid, row["to_user"])
+                )
+                # Insert migrated message
+                conn.execute(
+                    "INSERT INTO messages (id, conversation_id, from_user, message, image_id, timestamp, secret) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    (row["id"], cid, row["from_user"], row["message"], row["image_id"], row["timestamp"])
+                )
+
+            conn.execute("DROP TABLE messages_old")
+            print("Migration complete.")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_user)")
+
+        # Default admin account
         count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         if count == 0:
             conn.execute(
@@ -179,15 +262,93 @@ async def get_history(token: str = None):
     username = sessions[token]
     cutoff = (datetime.now() - timedelta(days=7)).isoformat()
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT from_user, to_user, message, image_id, timestamp
-            FROM messages
-            WHERE (from_user = ? OR to_user = ?) AND timestamp > ?
-            ORDER BY timestamp ASC
-        """, (username, username, cutoff)).fetchall()
-    history = [{"from": r["from_user"], "to": r["to_user"], "message": r["message"],
-                "image_id": r["image_id"], "timestamp": r["timestamp"]} for r in rows]
+        # Get all conversation IDs this user is a member of
+        convo_rows = conn.execute(
+            "SELECT conversation_id FROM conversation_members WHERE username = ?",
+            (username,)
+        ).fetchall()
+        convo_ids = [r["conversation_id"] for r in convo_rows]
+        if not convo_ids:
+            return {"history": []}
+        placeholders = ",".join("?" * len(convo_ids))
+        rows = conn.execute(f"""
+            SELECT m.conversation_id, m.from_user, m.message, m.image_id, m.timestamp, m.secret,
+                   c.secret as convo_secret
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id IN ({placeholders}) AND m.timestamp > ?
+            ORDER BY m.timestamp ASC
+        """, (*convo_ids, cutoff)).fetchall()
+        # Get other member for each convo (for client compatibility)
+        member_map = {}
+        for cid in convo_ids:
+            members = conn.execute(
+                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+            ).fetchall()
+            member_map[cid] = [m["username"] for m in members]
+
+    history = []
+    for r in rows:
+        members = member_map.get(r["conversation_id"], [])
+        to_user = next((m for m in members if m != r["from_user"]), r["from_user"])
+        history.append({
+            "from": r["from_user"],
+            "to": to_user,
+            "conversation_id": r["conversation_id"],
+            "message": r["message"],
+            "image_id": r["image_id"],
+            "timestamp": r["timestamp"],
+            "secret": bool(r["secret"] or r["convo_secret"])
+        })
     return {"history": history}
+
+@app.get("/api/secret/{other_user}")
+async def get_secret(other_user: str, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    cid = convo_id(username, other_user)
+    with get_db() as conn:
+        row = conn.execute("SELECT secret FROM conversations WHERE id = ?", (cid,)).fetchone()
+    return {"secret": bool(row["secret"]) if row else False}
+
+@app.post("/api/secret/{other_user}")
+async def set_secret(other_user: str, data: dict, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    cid = convo_id(username, other_user)
+    secret = 1 if data.get("secret") else 0
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, secret) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET secret = ?",
+            (cid, secret, secret)
+        )
+        conn.execute("INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)", (cid, username))
+        conn.execute("INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)", (cid, other_user))
+        conn.commit()
+    # Notify both parties of secret status change via WS if online
+    payload = {"type": "secret_changed", "with": other_user, "secret": bool(secret)}
+    if username in connected_clients:
+        await connected_clients[username].send_json(payload)
+    payload2 = {"type": "secret_changed", "with": username, "secret": bool(secret)}
+    if other_user in connected_clients:
+        await connected_clients[other_user].send_json(payload2)
+    return {"status": "ok", "secret": bool(secret)}
+
+@app.delete("/api/history/{other_user}")
+async def delete_history(other_user: str, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    cid = convo_id(username, other_user)
+    with get_db() as conn:
+        conn.execute("DELETE FROM messages WHERE conversation_id = ?", (cid,))
+        conn.commit()
+    payload = {"type": "chat_cleared", "with": username}
+    if other_user in connected_clients:
+        await connected_clients[other_user].send_json(payload)
+    return {"status": "ok"}
 
 @app.post("/api/pubkey")
 async def set_pubkey(data: dict, token: str = None):
@@ -230,16 +391,36 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             target = data.get("to")
             message = data.get("message") or ""
             image_id = data.get("image_id")
+            secret = 1 if data.get("secret") else 0
             if target and (message or image_id):
+                cid = convo_id(username, target)
                 ts = datetime.now().isoformat()
                 with get_db() as conn:
+                    # Ensure conversation and members exist
                     conn.execute(
-                        "INSERT INTO messages (from_user, to_user, message, image_id, timestamp) VALUES (?, ?, ?, ?, ?)",
-                        (username, target, message, image_id, ts)
+                        "INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
+                        (cid, secret)
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                        (cid, username)
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                        (cid, target)
+                    )
+                    conn.execute(
+                        "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) VALUES (?, ?, ?, ?, ?, ?)",
+                        (cid, username, message, image_id, ts, secret)
                     )
                     conn.commit()
             if target in connected_clients:
-                await connected_clients[target].send_json({"from": username, "message": message, "image_id": image_id})
+                await connected_clients[target].send_json({
+                    "from": username,
+                    "message": message,
+                    "image_id": image_id,
+                    "secret": bool(secret)
+                })
             else:
                 await websocket.send_json({"from": "server", "message": f"{target} is not online."})
     except WebSocketDisconnect:
