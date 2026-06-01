@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=ELE Messenger
+Exec=ele-messenger-client
+Icon=ele-messenger-client
+Type=Application
+Categories=Network;InstantMessaging;
