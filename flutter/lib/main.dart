@@ -5,6 +5,11 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:record/record.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
+import 'package:media_kit/media_kit.dart';
+import 'dart:io';
 
 const kBg          = Color(0xFF0F2A58);
 const kSidebarDark = Color(0xFF162E58);
@@ -69,7 +74,12 @@ String formatConvoTime(String ts) {
   } catch (_) { return ''; }
 }
 
-void main() => runApp(const ELEApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
+  JustAudioMediaKit.ensureInitialized();
+  runApp(const ELEApp());
+}
 
 class ELEApp extends StatefulWidget {
   const ELEApp({super.key});
@@ -208,6 +218,13 @@ class _ChatShellState extends State<ChatShell> {
   int _onlineCount = 0;
   Timer? _onlineTimer, _pingTimer;
   final _msgCtrl = TextEditingController();
+  // Voice recording
+  final AudioRecorder _recorder = AudioRecorder();
+  bool _recActive = false;
+  bool _recReview = false;
+  String? _recPath;
+  Duration _recDuration = Duration.zero;
+  Timer? _recTimer;
   final _scroll  = ScrollController();
 
   @override
@@ -284,7 +301,7 @@ class _ChatShellState extends State<ChatShell> {
         if (msg['type'] == 'pong') return;
         final from = msg['from'] as String?;
         if (from == null) return;
-        final entry = {'from': from, 'message': msg['message'] ?? '', 'ts': DateTime.now().toUtc().toIso8601String()};
+        final entry = {'from': from, 'message': msg['message'] ?? '', 'image_id': msg['image_id'], 'ts': DateTime.now().toUtc().toIso8601String()};
         setState(() {
           _threads.putIfAbsent(from, () => []).add(entry);
           if (_active != from) _unread[from] = (_unread[from] ?? 0) + 1;
@@ -310,6 +327,14 @@ class _ChatShellState extends State<ChatShell> {
     final entry = {'from': widget.username, 'message': msg, 'ts': DateTime.now().toUtc().toIso8601String()};
     setState(() => _threads.putIfAbsent(_active!, () => []).add(entry));
     _msgCtrl.clear();
+    _scrollBottom();
+  }
+
+  void _sendAudio(String imageId) {
+    if (_active == null || _ws == null) return;
+    _ws!.sink.add(jsonEncode({'to': _active, 'message': '', 'image_id': imageId}));
+    final entry = {'from': widget.username, 'to': _active, 'message': '', 'image_id': imageId, 'ts': DateTime.now().toUtc().toIso8601String()};
+    setState(() => _threads.putIfAbsent(_active!, () => []).add(entry));
     _scrollBottom();
   }
 
@@ -341,6 +366,8 @@ class _ChatShellState extends State<ChatShell> {
   void dispose() {
     _ws?.sink.close(); _msgCtrl.dispose(); _scroll.dispose();
     _onlineTimer?.cancel(); _pingTimer?.cancel();
+    _recTimer?.cancel();
+    _recorder.dispose();
     super.dispose();
   }
 
@@ -351,6 +378,127 @@ class _ChatShellState extends State<ChatShell> {
     _buildStatusBar(),
   ]));
 
+  // ── Voice recording ─────────────────────────────────────────────────────
+
+  Future<void> _recStart() async {
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) return;
+    final path =
+        '${Directory.systemTemp.path}/ele_rec_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+    setState(() {
+      _recActive = true; _recReview = false;
+      _recPath = null; _recDuration = Duration.zero;
+    });
+    _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() => _recDuration += const Duration(seconds: 1));
+      if (_recDuration.inSeconds >= 60) _recStop();
+    });
+  }
+
+  Future<void> _recStop() async {
+    _recTimer?.cancel();
+    final path = await _recorder.stop();
+    setState(() { _recActive = false; _recReview = true; _recPath = path; });
+  }
+
+  void _recDiscard() {
+    if (_recPath != null) { try { File(_recPath!).deleteSync(); } catch (_) {} }
+    setState(() {
+      _recActive = false; _recReview = false;
+      _recPath = null; _recDuration = Duration.zero;
+    });
+  }
+
+  Future<void> _recSend() async {
+    if (_recPath == null || _active == null) return;
+    final bytes = await File(_recPath!).readAsBytes();
+    final b64 = base64Encode(bytes);
+    final dataUri = 'data:audio/mp4;base64,$b64';
+    _recDiscard();
+    try {
+      final res = await http.post(
+        Uri.parse('$kApiBase/api/upload?token=${widget.token}'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'data': dataUri, 'mime': 'audio/mp4'}));
+      if (res.statusCode != 200) return;
+      final id = (jsonDecode(res.body) as Map)['id'] as String;
+      _sendAudio('audio:$id');
+    } catch (_) {}
+  }
+
+  String _recTimeStr() {
+    final m = _recDuration.inMinutes;
+    final s = (_recDuration.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  Widget _buildRecordingRow() => Row(children: [
+    const Icon(Icons.mic, color: Color(0xFFCC2020), size: 18),
+    const SizedBox(width: 8),
+    Text(_recTimeStr(),
+        style: const TextStyle(color: Color(0xFFAACCEE), fontSize: 15)),
+    const SizedBox(width: 8),
+    Expanded(child: Container(height: 2, color: const Color(0xFF4A7AB8))),
+    const SizedBox(width: 8),
+    ElevatedButton(
+      onPressed: _recStop,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF993333), foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+      child: const Text('Stop', style: TextStyle(fontSize: 15))),
+  ]);
+
+  Widget _buildReviewRow() => Row(children: [
+    const Icon(Icons.mic, color: Color(0xFF4A7AB8), size: 18),
+    const SizedBox(width: 8),
+    Text(_recTimeStr(),
+        style: const TextStyle(color: Color(0xFFAACCEE), fontSize: 15)),
+    const SizedBox(width: 4),
+    const Text('· Ready to send',
+        style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
+    const Spacer(),
+    InkWell(
+      onTap: _recDiscard,
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          border: Border.all(color: Colors.white.withOpacity(0.2)),
+          borderRadius: BorderRadius.circular(3)),
+        child: const Icon(Icons.close, color: Color(0xFFFF6666), size: 18))),
+    const SizedBox(width: 6),
+    ElevatedButton(
+      onPressed: _recSend,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: kAccent, foregroundColor: kTextPrimary,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+      child: const Text('Send', style: TextStyle(fontSize: 15))),
+  ]);
+
+  Widget _buildMessageContent(Map<String, dynamic> m) {
+    final imageId = m['image_id'] as String?;
+    final message = m['message'] as String? ?? '';
+    if (imageId != null && imageId.startsWith('audio:')) {
+      final id = imageId.substring(6);
+      return _AudioPlayerWidget(
+          url: '$kApiBase/api/image/$id?token=${widget.token}');
+    }
+    if (imageId != null && imageId.isNotEmpty) {
+      return Image.network(
+        '$kApiBase/api/image/$imageId?token=${widget.token}',
+        height: 180, fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) =>
+            const Text('[image]', style: TextStyle(color: Colors.grey)));
+    }
+    return Text(message,
+        style: const TextStyle(
+            fontSize: 16, color: Color(0xFF222222), height: 1.5));
+  }
+
   Widget _buildTitlebar() => Container(
     height: 40,
     decoration: const BoxDecoration(
@@ -359,9 +507,7 @@ class _ChatShellState extends State<ChatShell> {
       border: Border(bottom: BorderSide(color: Color(0xFF0A2060)))),
     padding: const EdgeInsets.symmetric(horizontal: 10),
     child: Row(children: [
-      Container(width: 9, height: 9, decoration: BoxDecoration(
-        color: _wsConnected ? kOnline : const Color(0xFF888888), shape: BoxShape.circle,
-        border: Border.all(color: _wsConnected ? kOnline : const Color(0xFF666666)))),
+      Image.asset('assets/icon.png', width: 18, height: 18),
       const SizedBox(width: 8),
       Expanded(child: Text('ELE Messenger \u2014 ${widget.username}',
         style: const TextStyle(color: kTextPrimary, fontSize: 15, fontWeight: FontWeight.bold,
@@ -390,7 +536,9 @@ class _ChatShellState extends State<ChatShell> {
   void _showAbout() => showDialog(context: context, builder: (_) => AlertDialog(
     backgroundColor: const Color(0xFF1E3A6E),
     title: const Text('ELE Messenger', style: TextStyle(color: kTextPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
-    content: const Column(mainAxisSize: MainAxisSize.min, children: [
+    content: Column(mainAxisSize: MainAxisSize.min, children: [
+      Image.asset('assets/coverart.png', width: 160, height: 160),
+      const SizedBox(height: 8),
       Text('v1.3.0', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
       SizedBox(height: 4),
       Text(kServerHost, style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
@@ -568,8 +716,7 @@ class _ChatShellState extends State<ChatShell> {
                 child: Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
                   const Text('\u00b7', style: TextStyle(fontSize: 8, color: Color(0xFFAAAAAA))),
                   const SizedBox(width: 6),
-                  Text(m['message'] as String,
-                    style: const TextStyle(fontSize: 16, color: Color(0xFF222222), height: 1.5)),
+                  _buildMessageContent(m),
                   const SizedBox(width: 4),
                   Text(formatTime(m['ts'] as String), style: const TextStyle(fontSize: 12, color: Color(0xFFAAAAAA))),
                 ]))),
@@ -582,19 +729,36 @@ class _ChatShellState extends State<ChatShell> {
     decoration: const BoxDecoration(
       gradient: LinearGradient(colors: [kInputTop, kInputBot]),
       border: Border(top: BorderSide(color: kBorder))),
-    child: Row(children: [
-      Expanded(child: TextField(controller: _msgCtrl, onSubmitted: (_) => _send(),
-        style: const TextStyle(fontSize: 16, color: Colors.black87),
-        decoration: InputDecoration(filled: true, fillColor: Colors.white.withOpacity(0.95),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(3), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), isDense: true))),
-      const SizedBox(width: 8),
-      ElevatedButton(onPressed: _send,
-        style: ElevatedButton.styleFrom(backgroundColor: kAccent, foregroundColor: kTextPrimary,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
-        child: const Text('Send', style: TextStyle(fontSize: 15))),
-    ]));
+    child: _recReview
+        ? _buildReviewRow()
+        : _recActive
+            ? _buildRecordingRow()
+            : _buildNormalInputRow());
+
+  Widget _buildNormalInputRow() => Row(children: [
+    Expanded(child: TextField(controller: _msgCtrl, onSubmitted: (_) => _send(),
+      style: const TextStyle(fontSize: 16, color: Colors.black87),
+      decoration: InputDecoration(filled: true, fillColor: Colors.white.withOpacity(0.95),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(3), borderSide: BorderSide.none),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), isDense: true))),
+    const SizedBox(width: 6),
+    InkWell(
+      onTap: _recStart,
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.12),
+          border: Border.all(color: Colors.white.withOpacity(0.25)),
+          borderRadius: BorderRadius.circular(3)),
+        child: const Icon(Icons.mic, color: Color(0xFF4A7AB8), size: 18))),
+    const SizedBox(width: 6),
+    ElevatedButton(onPressed: _send,
+      style: ElevatedButton.styleFrom(backgroundColor: kAccent, foregroundColor: kTextPrimary,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+      child: const Text('Send', style: TextStyle(fontSize: 15))),
+  ]);
 
   Widget _buildStatusBar() => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -607,4 +771,117 @@ class _ChatShellState extends State<ChatShell> {
         : 'Reconnecting...',
         style: const TextStyle(fontSize: 12, color: Color(0xFF4A6888))),
     ]));
+}
+
+// ── Audio player widget ───────────────────────────────────────────────────────
+
+class _AudioPlayerWidget extends StatefulWidget {
+  final String url;
+  const _AudioPlayerWidget({required this.url});
+  @override
+  State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
+}
+
+class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
+  final AudioPlayer _player = AudioPlayer();
+  bool _playing = false;
+  bool _loading = false;
+  Duration _pos = Duration.zero;
+  Duration _dur = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _player.positionStream.listen((p) {
+      if (mounted) setState(() => _pos = p);
+    });
+    _player.durationStream.listen((d) {
+      if (mounted) setState(() => _dur = d ?? Duration.zero);
+    });
+    _player.playerStateStream.listen((s) {
+      if (mounted) setState(() => _playing = s.playing);
+      if (s.processingState == ProcessingState.completed) {
+        _player.seek(Duration.zero);
+        _player.stop();
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        print('[audio] setUrl: ' + widget.url);
+        await _player.setUrl(widget.url);
+        print('[audio] setUrl complete, dur=' + _dur.toString());
+      } catch (e) {
+        print('[audio] setUrl error: ' + e.toString());
+      }
+    });
+  }
+
+  @override
+  void dispose() { _player.dispose(); super.dispose(); }
+
+  Future<void> _toggle() async {
+    print('[audio] _toggle called, _playing=' + _playing.toString());
+    if (_playing) {
+      await _player.pause();
+    } else {
+      print('[audio] calling play()');
+      await _player.play();
+      print('[audio] play() returned');
+    }
+  }
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes;
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = _dur.inMilliseconds > 0
+        ? _pos.inMilliseconds / _dur.inMilliseconds
+        : 0.0;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8EEF8),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFFAABBDD))),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        InkWell(
+          onTap: _loading ? null : _toggle,
+          child: Container(
+            width: 32, height: 32,
+            decoration: const BoxDecoration(
+                color: Color(0xFF4A7AB8), shape: BoxShape.circle),
+            child: _loading
+                ? const Center(
+                    child: SizedBox(width: 14, height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white)))
+                : Icon(_playing ? Icons.pause : Icons.play_arrow,
+                    color: Colors.white, size: 20))),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                value: progress,
+                backgroundColor: const Color(0xFFCCDDEE),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                    Color(0xFF4A7AB8)),
+                minHeight: 3)),
+            const SizedBox(height: 3),
+            Text(
+              _dur > Duration.zero
+                  ? '${_fmt(_pos)} / ${_fmt(_dur)}'
+                  : '🎤 Voice note',
+              style: const TextStyle(
+                  fontSize: 11, color: Color(0xFF4A6888))),
+          ]),
+      ]));
+  }
 }
