@@ -539,7 +539,7 @@ class _ChatShellState extends State<ChatShell> {
     content: Column(mainAxisSize: MainAxisSize.min, children: [
       Image.asset('assets/coverart.png', width: 160, height: 160),
       const SizedBox(height: 8),
-      Text('v1.3.0', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
+      Text('v1.3.1', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
       SizedBox(height: 4),
       Text(kServerHost, style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
       SizedBox(height: 4),
