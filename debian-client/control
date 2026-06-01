@@ -1,0 +1,7 @@
+Package: ele-messenger-client
+Version: 1.3.1-1
+Architecture: amd64
+Maintainer: thefangeddeity
+Description: ELE Messenger desktop client
+ Resilience-first household chat desktop client.
+Depends: libgtk-3-0, mpv
