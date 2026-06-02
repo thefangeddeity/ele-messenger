@@ -243,7 +243,8 @@ class _ChatShellState extends State<ChatShell> {
   final Map<String, int> _unread = {};
   List<String> _contacts = [];
   Set<String> _online = {};
-  String? _active;
+  String? _active;        // active conversation_id
+  String? _activePeer;    // peer username for active convo
   bool _wsConnected = false, _showScrollBtn = false;
   String _transport = '';
   int _onlineCount = 0;
@@ -257,6 +258,7 @@ class _ChatShellState extends State<ChatShell> {
   Duration _recDuration = Duration.zero;
   Timer? _recTimer;
   final _scroll  = ScrollController();
+  final Map<String, bool> _secretChats = {};
 
   @override
   void initState() {
@@ -300,10 +302,13 @@ class _ChatShellState extends State<ChatShell> {
         final all = (jsonDecode(res.body)['history'] as List).cast<Map<String, dynamic>>();
         final Map<String, List<Map<String, dynamic>>> grouped = {};
         for (final m in all) {
-          final other = m['from'] == widget.username ? m['to'] as String : m['from'] as String;
-          grouped.putIfAbsent(other, () => []).add({
+          final cid = m['conversation_id'] as String? ??
+            ((){final p = [m['from'] as String, m['to'] as String]..sort(); return p.join(':');})();
+          grouped.putIfAbsent(cid, () => []).add({
             'from': m['from'] as String, 'to': m['to'] as String,
             'message': m['message'] as String, 'ts': m['timestamp'] as String,
+            'image_id': m['image_id'],
+            'conversation_id': cid,
           });
         }
         setState(() => _threads.addAll(grouped));
@@ -330,6 +335,11 @@ class _ChatShellState extends State<ChatShell> {
       _ws!.stream.listen((data) {
         final msg = jsonDecode(data) as Map<String, dynamic>;
         if (msg['type'] == 'pong') return;
+        if (msg['type'] == 'secret_chat_started') {
+          final with_ = msg['with'] as String?;
+          if (with_ != null) setState(() => _secretChats[with_] = true);
+          return;
+        }
         final from = msg['from'] as String?;
         if (from == null) return;
         final entry = {'from': from, 'message': msg['message'] ?? '', 'image_id': msg['image_id'], 'ts': DateTime.now().toUtc().toIso8601String()};
@@ -376,22 +386,58 @@ class _ChatShellState extends State<ChatShell> {
     });
   }
 
+  void _selectCid(String cid, String peer) {
+    setState(() { _active = cid; _activePeer = peer; _unread.remove(cid); });
+    _scrollBottom();
+  }
+
   Future<void> _selectContact(String name) async {
-    setState(() { _active = name; _unread.remove(name); });
-    if (!_threads.containsKey(name)) await _loadHistory(name);
+    final parts = [widget.username, name]..sort();
+    final cid = parts.join(':');
+    setState(() { _active = cid; _activePeer = name; _unread.remove(cid); _threads.putIfAbsent(cid, () => []); });
+    await _loadHistory(name);
     _scrollBottom();
   }
 
   Future<void> _clearChat() async {
-    if (_active == null) return;
+    if (_activePeer == null || _active == null) return;
     try {
-      await http.delete(Uri.parse('$kApiBase/api/history/${_active!}?token=${widget.token}'));
-      setState(() => _threads[_active!] = []);
+      final secretParam = _cidIsSecret(_active!) ? '&secret=true' : '';
+      await http.delete(Uri.parse('$kApiBase/api/history/${_activePeer!}?token=${widget.token}${secretParam}'));
+      setState(() {
+        _threads.remove(_active);
+        _active = null;
+        _activePeer = null;
+      });
     } catch (_) {}
   }
 
-  List<String> get _activeContacts =>
-    _contacts.where((c) => _threads.containsKey(c) && _threads[c]!.isNotEmpty).toList();
+  void _startSecretChat() {
+    if (_activePeer == null) return;
+    final parts = [widget.username, _activePeer!]..sort();
+    final secretCid = 'secret:' + parts.join(':');
+    setState(() {
+      _threads.putIfAbsent(secretCid, () => []);
+      _active = secretCid;
+    });
+  }
+
+  List<String> get _activeContacts {
+    final result = <String>[];
+    for (final cid in _threads.keys) {
+      final peer = _peerFromCid(cid);
+      if (peer == null) continue;
+      if (_threads[cid]!.isEmpty && cid != _active) continue;
+      result.add(cid);
+    }
+    return result;
+  }
+  String? _peerFromCid(String cid) {
+    final parts = cid.startsWith('secret:') ? cid.substring(7).split(':') : cid.split(':');
+    if (parts.length < 2) return null;
+    return parts.firstWhere((p) => p != widget.username, orElse: () => parts[0]);
+  }
+  bool _cidIsSecret(String cid) => cid.startsWith('secret:');
 
   @override
   void dispose() {
@@ -553,11 +599,22 @@ class _ChatShellState extends State<ChatShell> {
             await prefs.clear();
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
           }
+          else if (val == 'secret') _startSecretChat();
+          else if (val == 'settings') showDialog(context: context, builder: (_) => AlertDialog(
+            backgroundColor: const Color(0xFF1E3A6E),
+            title: const Text('Settings', style: TextStyle(color: kTextPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+            content: const Text('Coming soon.', style: TextStyle(color: kTextPrimary)),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK', style: TextStyle(color: kAccent)))]));
           else if (val == 'clearchat' && _active != null) await _clearChat();
           else if (val == 'about') _showAbout();
         },
         itemBuilder: (_) => [
-          const PopupMenuItem(value: 'clearchat', child: Text('Clear chat', style: TextStyle(color: Color(0xFFFF6666), fontSize: 14))),
+          if (_activePeer != null && !_cidIsSecret(_active ?? ''))
+            const PopupMenuItem(value: 'secret', child: Text(
+              'Start secret chat',
+              style: TextStyle(color: kTextPrimary, fontSize: 14))),
+          const PopupMenuItem(value: 'clearchat', child: Text('Delete chat for both', style: TextStyle(color: Color(0xFFFF6666), fontSize: 14))),
+          const PopupMenuItem(value: 'settings', child: Text('Settings', style: TextStyle(color: kTextPrimary, fontSize: 14))),
           const PopupMenuItem(value: 'about', child: Text('About', style: TextStyle(color: kTextPrimary, fontSize: 14))),
           const PopupMenuDivider(),
           const PopupMenuItem(value: 'signout', child: Text('Sign out', style: TextStyle(color: kTextPrimary, fontSize: 14))),
@@ -619,35 +676,95 @@ class _ChatShellState extends State<ChatShell> {
   }
 
   void _showNewChatModal() {
-    final available = _contacts.where((c) => !(_threads.containsKey(c) && _threads[c]!.isNotEmpty)).toList();
-    showDialog(context: context, builder: (_) => AlertDialog(
-      backgroundColor: const Color(0xFF1E3A6E),
-      title: const Text('New Chat', style: TextStyle(color: Color(0xFFAACCEE), fontSize: 15)),
-      content: SizedBox(width: 220, child: available.isEmpty
-        ? const Text('No other users found.', style: TextStyle(color: Color(0xFF5A7898)))
-        : ListView.builder(shrinkWrap: true, itemCount: available.length, itemBuilder: (_, i) {
-            final name = available[i];
-            return ListTile(
-              leading: CircleAvatar(backgroundColor: avatarColor(name),
-                child: Text(name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-              title: Text(name, style: const TextStyle(color: Color(0xFFAACCEE), fontSize: 14)),
-              trailing: Container(width: 8, height: 8, decoration: BoxDecoration(
-                color: _online.contains(name) ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
-              onTap: () { Navigator.pop(context); _selectContact(name); });
-          })),
-      actions: [TextButton(onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel', style: TextStyle(color: kAccent)))]));
+    final activePeers = _activeContacts.map((cid) => _peerFromCid(cid)).toSet();
+    final available = _contacts.where((c) => !activePeers.contains(c)).toList();
+    final selected = <String>{};
+    bool isSecret = false;
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: const Color(0xFF1E3A6E),
+          title: const Text('New Chat', style: TextStyle(color: Color(0xFFAACCEE), fontSize: 15)),
+          content: SizedBox(width: 260, child: available.isEmpty
+            ? const Text('No other users found.', style: TextStyle(color: Color(0xFF5A7898)))
+            : Column(mainAxisSize: MainAxisSize.min, children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: available.length,
+                    itemBuilder: (_, i) {
+                      final name = available[i];
+                      final disabled = isSecret && selected.isNotEmpty && !selected.contains(name);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: CheckboxListTile(
+                          value: selected.contains(name),
+                          onChanged: disabled ? null : (v) => setS(() {
+                            if (v == true) { selected.clear(); selected.add(name); } else selected.remove(name);
+                          }),
+                          title: Text(name, style: TextStyle(
+                            color: disabled ? const Color(0xFF3A5878) : const Color(0xFFAACCEE),
+                            fontSize: 14)),
+                          secondary: CircleAvatar(radius: 20, backgroundColor: avatarColor(name),
+                            child: Text(name[0].toUpperCase(),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
+                          activeColor: kAccent,
+                          checkColor: Colors.white,
+                          controlAffinity: ListTileControlAffinity.trailing,
+                        ));
+                    })),
+                const Divider(color: Color(0xFF5A7AB8), thickness: 1, height: 24),
+                CheckboxListTile(
+                  value: isSecret,
+                  onChanged: selected.length > 1 ? null : (v) => setS(() => isSecret = v ?? false),
+                  title: Text('Secret chat',
+                    style: TextStyle(
+                      color: selected.length > 1 ? const Color(0xFF3A5878) : const Color(0xFFAACC88),
+                      fontSize: 13)),
+                  secondary: const Icon(Icons.lock, color: Color(0xFFAACC88), size: 16),
+                  activeColor: const Color(0xFFAACC88),
+                  checkColor: Colors.white,
+                  controlAffinity: ListTileControlAffinity.trailing,
+                  dense: true,
+                ),
+              ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: kAccent))),
+            TextButton(
+              onPressed: selected.isEmpty ? null : () async {
+                Navigator.pop(context);
+                if (isSecret && selected.length == 1) {
+                  final peer = selected.first;
+                  final parts = [widget.username, peer]..sort();
+                  final secretCid = 'secret:' + parts.join(':');
+                  await _selectContact(peer);
+                  setState(() {
+                    _threads.putIfAbsent(secretCid, () => []);
+                    _active = secretCid;
+                  });
+                } else if (selected.length == 1) {
+                  await _selectContact(selected.first);
+                } else {
+                  for (final c in selected) await _selectContact(c);
+                }
+              },
+              child: const Text('Start', style: TextStyle(color: kAccent))),
+          ])));
   }
 
   Widget _buildConvoRow(String name) {
     final isActive = _active == name;
-    final isOnline = _online.contains(name);
+    final isOnline = _online.contains(_peerFromCid(name) ?? name);
     final unread   = _unread[name] ?? 0;
     final msgs     = _threads[name] ?? [];
+    final isSecret = _cidIsSecret(name);
     final preview  = msgs.isNotEmpty ? msgs.last['message'] as String : '';
     final ts       = msgs.isNotEmpty ? formatConvoTime(msgs.last['ts'] as String) : '';
     return GestureDetector(
-      onTap: () => _selectContact(name),
+      onTap: () { final peer = _peerFromCid(name); if (peer != null) _selectCid(name, peer); },
       child: Container(
         height: 72,
         padding: EdgeInsets.only(left: isActive ? 11 : 14, right: 14, top: 10, bottom: 10),
@@ -661,14 +778,20 @@ class _ChatShellState extends State<ChatShell> {
             decoration: BoxDecoration(
               color: isOnline ? kOnline : const Color(0xFF555555), shape: BoxShape.circle,
               border: Border.all(color: isOnline ? const Color(0xFF3A9000) : const Color(0xFF444444)))),
-          CircleAvatar(radius: 20, backgroundColor: avatarColor(name),
-            child: Text(name[0].toUpperCase(),
+          CircleAvatar(radius: 20, backgroundColor: avatarColor(_peerFromCid(name) ?? name),
+            child: Text((_peerFromCid(name) ?? name)[0].toUpperCase(),
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text(name, style: TextStyle(fontSize: 14,
-              color: unread > 0 ? kTextPrimary : const Color(0xFFAACCEE),
-              fontWeight: unread > 0 ? FontWeight.bold : FontWeight.normal)),
+            Row(children: [
+              Text(_peerFromCid(name) ?? name, style: TextStyle(fontSize: 14,
+                color: unread > 0 ? kTextPrimary : const Color(0xFFAACCEE),
+                fontWeight: unread > 0 ? FontWeight.bold : FontWeight.normal)),
+              if (isSecret) ...[
+                const SizedBox(width: 4),
+                const Icon(Icons.lock, color: Color(0xFFAACC88), size: 12),
+              ],
+            ]),
             if (preview.isNotEmpty) Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 12, color: unread > 0 ? const Color(0xFF88AACC) : kTextMuted)),
           ])),
@@ -708,8 +831,12 @@ class _ChatShellState extends State<ChatShell> {
       if (_active != null) ...[
         Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 8),
           decoration: BoxDecoration(
-            color: _online.contains(_active!) ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
-        Text('Chat with ${_active!}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
+            color: _online.contains(_activePeer ?? '') ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
+        Text('Chat with ${_activePeer ?? _active!}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
+        if (_cidIsSecret(_active!)) ...[
+          const SizedBox(width: 6),
+          const Icon(Icons.lock, color: Color(0xFFAACC88), size: 14),
+        ],
       ]]));
 
   Widget _buildMessages() {
