@@ -1,4 +1,4 @@
-# ELE Messenger - server.py v1.3.0
+# ELE Messenger - server.py v1.3.2
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
@@ -22,9 +22,10 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def convo_id(user_a, user_b):
+def convo_id(user_a, user_b, secret=False):
     """Deterministic conversation ID for a pair of users."""
-    return ":".join(sorted([user_a, user_b]))
+    prefix = "secret:" if secret else ""
+    return prefix + ":".join(sorted([user_a, user_b]))
 
 def init_db():
     with get_db() as conn:
@@ -307,41 +308,39 @@ async def get_secret(other_user: str, token: str = None):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     username = sessions[token]
-    cid = convo_id(username, other_user)
+    cid = convo_id(username, other_user, secret=True)
     with get_db() as conn:
-        row = conn.execute("SELECT secret FROM conversations WHERE id = ?", (cid,)).fetchone()
-    return {"secret": bool(row["secret"]) if row else False}
+        row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
+    return {"secret": bool(row) if row else False}
 
 @app.post("/api/secret/{other_user}")
 async def set_secret(other_user: str, data: dict, token: str = None):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     username = sessions[token]
-    cid = convo_id(username, other_user)
-    secret = 1 if data.get("secret") else 0
+    cid = convo_id(username, other_user, secret=True)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO conversations (id, secret) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET secret = ?",
-            (cid, secret, secret)
+            "INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, 1)",
+            (cid,)
         )
         conn.execute("INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)", (cid, username))
         conn.execute("INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)", (cid, other_user))
         conn.commit()
-    # Notify both parties of secret status change via WS if online
-    payload = {"type": "secret_changed", "with": other_user, "secret": bool(secret)}
+    payload = {"type": "secret_chat_started", "with": other_user}
     if username in connected_clients:
         await connected_clients[username].send_json(payload)
-    payload2 = {"type": "secret_changed", "with": username, "secret": bool(secret)}
+    payload2 = {"type": "secret_chat_started", "with": username}
     if other_user in connected_clients:
         await connected_clients[other_user].send_json(payload2)
-    return {"status": "ok", "secret": bool(secret)}
+    return {"status": "ok", "secret": True}
 
 @app.delete("/api/history/{other_user}")
-async def delete_history(other_user: str, token: str = None):
+async def delete_history(other_user: str, token: str = None, secret: bool = False):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     username = sessions[token]
-    cid = convo_id(username, other_user)
+    cid = convo_id(username, other_user, secret=secret)
     with get_db() as conn:
         conn.execute("DELETE FROM messages WHERE conversation_id = ?", (cid,))
         conn.commit()
@@ -393,7 +392,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             image_id = data.get("image_id")
             secret = 1 if data.get("secret") else 0
             if target and (message or image_id):
-                cid = convo_id(username, target)
+                cid = convo_id(username, target, secret=bool(secret))
                 ts = datetime.now().isoformat()
                 with get_db() as conn:
                     # Ensure conversation and members exist
@@ -419,7 +418,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     "from": username,
                     "message": message,
                     "image_id": image_id,
-                    "secret": bool(secret)
+                    "secret": bool(secret),
+                    "conversation_id": cid
                 })
             else:
                 await websocket.send_json({"from": "server", "message": f"{target} is not online."})
