@@ -35,7 +35,7 @@ Color avatarColor(String name) {
   return kAvatarColors[h % kAvatarColors.length];
 }
 
-const kServerHost = 'tina.humboldt-polaris.ts.net';
+String kServerHost = 'tina.humboldt-polaris.ts.net';
 String get kApiBase => 'https://$kServerHost/ele-api';
 String get kWsBase  => 'wss://$kServerHost/ele-ws';
 
@@ -74,10 +74,12 @@ String formatConvoTime(String ts) {
   } catch (_) { return ''; }
 }
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   JustAudioMediaKit.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  kServerHost = prefs.getString('server_host') ?? 'tina.humboldt-polaris.ts.net';
   runApp(const ELEApp());
 }
 
@@ -158,8 +160,31 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (_) { setState(() { _error = 'Server unreachable.'; _loading = false; }); }
   }
 
+  Future<void> _editServer() async {
+    final ctrl = TextEditingController(text: kServerHost);
+    await showDialog(context: context, builder: (_) => AlertDialog(
+      title: const Text('Message server'),
+      content: TextField(
+        controller: ctrl,
+        decoration: const InputDecoration(labelText: 'Enter message server'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () async {
+          final host = ctrl.text.trim();
+          if (host.isNotEmpty) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('server_host', host);
+            setState(() { kServerHost = host; });
+          }
+          if (mounted) Navigator.pop(context);
+        }, child: const Text('Save')),
+      ],
+    ));
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(body: Container(
+  Widget build(BuildContext context) => Scaffold(body: Stack(children: [Container(
     decoration: const BoxDecoration(gradient: LinearGradient(
       begin: Alignment.topLeft, end: Alignment.bottomRight,
       colors: [kBg, Color(0xFF1E3A6E)])),
@@ -186,7 +211,13 @@ class _LoginScreenState extends State<LoginScreen> {
           onTap: () => setState(() { _isRegister = !_isRegister; _error = ''; }),
           child: Text(_isRegister ? 'Already have an account? Sign in' : 'New user? Register',
             style: const TextStyle(fontSize: 13, color: Color(0xFF1A4880), decoration: TextDecoration.underline))),
-      ])))));
+      ])))),
+    Positioned(top: 12, right: 12, child: PopupMenuButton<String>(
+      icon: const Icon(Icons.settings, color: Colors.white54),
+      onSelected: (val) async { if (val == 'server') await _editServer(); },
+      itemBuilder: (_) => [const PopupMenuItem(value: 'server', child: Text('Message server'))],
+    )),
+  ]));
 
   Widget _field(TextEditingController ctrl, String label, bool obscure) => TextField(
     controller: ctrl, obscureText: obscure,
@@ -539,7 +570,7 @@ class _ChatShellState extends State<ChatShell> {
     content: Column(mainAxisSize: MainAxisSize.min, children: [
       Image.asset('assets/coverart.png', width: 160, height: 160),
       const SizedBox(height: 8),
-      Text('v1.3.1', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
+      Text('v1.3.2', style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
       SizedBox(height: 4),
       Text(kServerHost, style: TextStyle(color: Color(0xFF7A9ABF), fontSize: 13)),
       SizedBox(height: 4),
