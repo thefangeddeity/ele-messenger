@@ -1,6 +1,7 @@
-ele-messenger (1.3.4-1) UNRELEASED; urgency=medium
+ele-messenger (1.3.5-1) resolute; urgency=medium
 
   * v1.3.4: fix 1:1 sidebar display name, secret chat guards, mobile new chat modal
+  * v1.3.5: image attach + compression (web+Flutter), 16MB limit, delete chat for all
 
 
   * v1.3.1: Flutter client - just_audio_media_kit, record v6, WS
@@ -8,8 +9,9 @@ ele-messenger (1.3.4-1) UNRELEASED; urgency=medium
   * v1.3.2: secret chat, conversation_id routing, delete secret chat
     support
   * v1.3.3: group chat, fix deleted chats reappearing
+  * fix about-version string (was stuck at v1.3.3)
 
- -- Ron Gonzales <ron@tina>  Wed, 03 Jun 2026 00:33:52 +0000
+ -- Ron Gonzales <thefangeddeity@gmail.com>  Wed, 03 Jun 2026 21:43:29 +0000
 
 ele-messenger (1.3.0-1) stable; urgency=medium
 
