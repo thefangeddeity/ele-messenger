@@ -10,6 +10,8 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:media_kit/media_kit.dart';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 
 const kBg          = Color(0xFF0F2A58);
 const kSidebarDark = Color(0xFF162E58);
@@ -662,7 +664,7 @@ class _ChatShellState extends State<ChatShell> {
             const PopupMenuItem(value: 'secret', child: Text(
               'Start secret chat',
               style: TextStyle(color: kTextPrimary, fontSize: 14))),
-          const PopupMenuItem(value: 'clearchat', child: Text('Delete chat for both', style: TextStyle(color: Color(0xFFFF6666), fontSize: 14))),
+          PopupMenuItem(value: 'clearchat', child: Text(_cidIsGroup(_active ?? '') ? 'Delete chat for all' : 'Delete chat for both', style: TextStyle(color: Color(0xFFFF6666), fontSize: 14))),
           const PopupMenuItem(value: 'settings', child: Text('Settings', style: TextStyle(color: kTextPrimary, fontSize: 14))),
           const PopupMenuItem(value: 'about', child: Text('About', style: TextStyle(color: kTextPrimary, fontSize: 14))),
           const PopupMenuDivider(),
@@ -959,6 +961,33 @@ class _ChatShellState extends State<ChatShell> {
         }));
   }
 
+  Future<void> _pickAndSendImage() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image);
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null) return;
+    final rawBytes = await File(path).readAsBytes();
+    final decoded = img.decodeImage(rawBytes);
+    if (decoded == null) return;
+    final resized = decoded.width > 1920 || decoded.height > 1920
+        ? img.copyResize(decoded,
+            width: decoded.width >= decoded.height ? 1920 : -1,
+            height: decoded.height > decoded.width ? 1920 : -1)
+        : decoded;
+    final compressed = img.encodeJpg(resized, quality: 85);
+    final b64 = base64Encode(compressed);
+    final dataUri = 'data:image/jpeg;base64,\$b64';
+    try {
+      final res = await http.post(
+        Uri.parse('\$kApiBase/api/upload?token=\${widget.token}'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'data': dataUri, 'mime': 'image/jpeg'}));
+      if (res.statusCode != 200) return;
+      final id = (jsonDecode(res.body) as Map)['id'] as String;
+      _sendAudio(id);
+    } catch (_) {}
+  }
+
   Widget _buildInputRow() => Container(
     padding: const EdgeInsets.all(8),
     decoration: const BoxDecoration(
@@ -971,6 +1000,17 @@ class _ChatShellState extends State<ChatShell> {
             : _buildNormalInputRow());
 
   Widget _buildNormalInputRow() => Row(children: [
+    InkWell(
+      onTap: _pickAndSendImage,
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          border: Border.all(color: Colors.white.withOpacity(0.2)),
+          borderRadius: BorderRadius.circular(3)),
+        child: const Icon(Icons.attach_file, color: Color(0xFF4A7AB8), size: 20))),
+    const SizedBox(width: 6),
     Expanded(child: TextField(controller: _msgCtrl, onSubmitted: (_) => _send(),
       style: const TextStyle(fontSize: 16, color: Colors.black87),
       decoration: InputDecoration(filled: true, fillColor: Colors.white.withOpacity(0.95),
