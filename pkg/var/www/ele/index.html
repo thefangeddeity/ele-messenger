@@ -49,10 +49,10 @@ body { font-family: Tahoma, 'Segoe UI', sans-serif; font-size: 18px; background:
 #about-close { margin-top: 16px; background: linear-gradient(to bottom, #4a7ab8, #1a4a8a); color: #ddeeff; border: 1px solid #0a3070; padding: 8px 24px; border-radius: 3px; cursor: pointer; font-size: 15px; }
 #modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
 #modal-overlay.open { display: flex; }
-#modal-box { background: #1e3a6e; border: 1px solid #4a7ab8; border-radius: 6px; padding: 16px; width: 260px; max-height: 60vh; display: flex; flex-direction: column; }
+#modal-box { background: #1e3a6e; border: 1px solid #4a7ab8; border-radius: 6px; padding: 16px; width: min(320px, 90vw); max-height: 70vh; display: flex; flex-direction: column; }
 #modal-box h3 { color: #aaccee; font-size: 14px; margin-bottom: 10px; }
 #account-list { overflow-y: auto; flex: 1; }
-.account-item { padding: 12px 14px; color: #aaccee; cursor: pointer; border-radius: 3px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.account-item { padding: 10px 14px; color: #aaccee; cursor: pointer; border-radius: 3px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .account-item:hover { background: rgba(80,140,220,0.3); }
 .account-item .convo-online { margin-top: 0; }
 #modal-cancel { margin-top: 10px; background: rgba(255,255,255,0.1); color: #aaccee; border: 1px solid rgba(255,255,255,0.2); padding: 10px; border-radius: 3px; cursor: pointer; width: 100%; font-size: 13px; }
@@ -283,6 +283,8 @@ const secretChats = new Set();
 const threads = {};
 const unread = {};
 let onlineUsers = new Set();
+const groupNames = {};
+const groupMembers = {};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const AVATAR_COLORS = [
@@ -293,6 +295,7 @@ const AVATAR_COLORS = [
   'linear-gradient(135deg,#b03050,#801020)',
   'linear-gradient(135deg,#208080,#105050)',
 ];
+function isGroupCid(cid) { return cid && !cid.includes(':'); }
 function avatarColor(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
@@ -582,11 +585,24 @@ function connectChat(username, tok) {
       const r = await fetch('/ele-api/api/history?token=' + token);
       const data = await r.json();
       for (const m of (data.history || [])) {
+        const cid = m.conversation_id || (m.from === me ? m.to : m.from);
         const contact = m.from === me ? m.to : m.from;
-        if (m.secret) secretChats.add(contact);
+        if (m.secret) secretChats.add(cid);
         let text = m.message;
         if (m.secret && m.message) { try { text = await decryptMsg(contact, m.message); } catch { text = '[message not on this device]'; } }
-        addMessage(contact, m.from, text, m.image_id || null, m.from === me, m.timestamp);
+        addMessage(cid, m.from, text, m.image_id || null, m.from === me, m.timestamp);
+      }
+      updateSidebar();
+    } catch {}
+    try {
+      const gr = await fetch('/ele-api/api/conversations?token=' + token);
+      const gd = await gr.json();
+      for (const c of (gd.conversations || [])) {
+        if (isGroupCid(c.conversation_id)) {
+          groupNames[c.conversation_id] = c.name || c.conversation_id;
+          groupMembers[c.conversation_id] = c.members || [];
+          if (!threads[c.conversation_id]) threads[c.conversation_id] = [];
+        }
       }
       updateSidebar();
     } catch {}
@@ -610,11 +626,28 @@ function connectChat(username, tok) {
       updateSidebar();
       return;
     }
+    if (d.type === 'conversation_created') {
+      const cid = d.conversation_id;
+      if (cid && isGroupCid(cid)) {
+        groupNames[cid] = d.name || cid;
+        groupMembers[cid] = d.members || [];
+        if (!threads[cid]) threads[cid] = [];
+        updateSidebar();
+      }
+      return;
+    }
+    if (d.type === 'member_added') {
+      const cid = d.conversation_id;
+      if (cid) groupMembers[cid] = d.members || [];
+      return;
+    }
+    const incomingCid = d.conversation_id;
+    const effectiveCid = incomingCid || d.from;
     let text = d.message;
-    if (d.secret && d.message) { try { text = await decryptMsg(contact, d.message); } catch { text = '[message not on this device]'; } }
-    addMessage(contact, d.from, text, d.image_id || null, false);
-    if (contact !== activeContact) {
-      unread[contact] = (unread[contact] || 0) + 1;
+    if (d.secret && d.message) { try { text = await decryptMsg(d.from, d.message); } catch { text = '[message not on this device]'; } }
+    addMessage(effectiveCid, d.from, text, d.image_id || null, false);
+    if (effectiveCid !== activeContact) {
+      unread[effectiveCid] = (unread[effectiveCid] || 0) + 1;
     }
     updateSidebar();
   };
@@ -719,13 +752,19 @@ function setActiveContact(u) {
   activeContact = u;
   delete unread[u];
   updateSidebar();
-  // Pre-derive shared key in background
-  if (myKeyPair) ensureSharedKey(u).catch(() => {});
+  const isGroup = isGroupCid(u);
   const dot = document.getElementById('chat-header-dot');
-  dot.className = 'chat-header-dot' + (onlineUsers.has(u) ? ' on' : '');
-  dot.style.display = '';
-  document.getElementById('chat-header-text').textContent = 'Chat with ' + u;
-  document.getElementById('hmenu-secret').style.display = '';
+  if (isGroup) {
+    dot.style.display = 'none';
+    document.getElementById('chat-header-text').textContent = groupNames[u] || u;
+    document.getElementById('hmenu-secret').style.display = 'none';
+  } else {
+    if (myKeyPair) ensureSharedKey(u).catch(() => {});
+    dot.className = 'chat-header-dot' + (onlineUsers.has(u) ? ' on' : '');
+    dot.style.display = '';
+    document.getElementById('chat-header-text').textContent = 'Chat with ' + u;
+    document.getElementById('hmenu-secret').style.display = '';
+  }
   document.getElementById('hmenu-delete').style.display = '';
   document.getElementById('inputrow').style.display = 'flex';
   updateChatHeader();
@@ -759,7 +798,9 @@ function updateSidebar() {
   list.innerHTML = '';
   mcontacts.innerHTML = '<button class="mobile-contact" onclick="openNewChat()">+ New</button>';
   sorted.forEach(u => {
-    const isOnline = onlineUsers.has(u);
+    const isGroup = isGroupCid(u);
+    const isOnline = !isGroup && onlineUsers.has(u);
+    const displayName = isGroup ? (groupNames[u] || u) : u.split(':').filter(p => p !== me && p !== 'secret').join(', ') || u;
     const lastMsg = threads[u] && threads[u].length > 0 ? threads[u][threads[u].length-1] : null;
     const preview = lastMsg ? (lastMsg.image_id ? (lastMsg.image_id.startsWith('audio:') ? (lastMsg.isSelf ? 'You: 🎤 Voice note' : '🎤 Voice note') : (lastMsg.isSelf ? 'You: 📷 Photo' : '📷 Photo')) : (lastMsg.isSelf ? 'You: ' + lastMsg.text : lastMsg.text)) : '';
     const timeStr = lastMsg ? fmtTime(normDate(lastMsg.ts)) : '';
@@ -767,11 +808,14 @@ function updateSidebar() {
     const el = document.createElement('div');
     el.className = 'convo' + (u === activeContact ? ' active' : '') + (uc > 0 ? ' unread' : '');
     el.onclick = () => setActiveContact(u);
+    const avatarHtml = isGroup
+      ? '<div class="convo-avatar" style="background:linear-gradient(135deg,#4a4a8a,#2a2a6a);font-size:18px;">&#128101;</div>'
+      : '<div class="convo-avatar" style="background:' + avatarColor(u) + '">' + escHtml(initials(u)) + '</div>';
     el.innerHTML =
       '<div class="convo-online' + (isOnline ? ' on' : '') + '"></div>' +
-      '<div class="convo-avatar" style="background:' + avatarColor(u) + '">' + escHtml(initials(u)) + '</div>' +
+      avatarHtml +
       '<div class="convo-info">' +
-        '<div class="convo-name">' + escHtml(u) + (secretChats.has(u) ? ' <span style="font-size:12px;">&#128274;</span>' : '') + '</div>' +
+        '<div class="convo-name">' + escHtml(displayName) + (secretChats.has(u) ? ' <span style="font-size:12px;">&#128274;</span>' : '') + '</div>' +
         '<div class="convo-preview">' + escHtml((preview || '').slice(0,40)) + '</div>' +
       '</div>' +
       '<div class="convo-meta">' +
@@ -795,7 +839,11 @@ async function send(imageId) {
   if (msg && isSecret && myKeyPair) {
     payload = await encryptMsg(activeContact, msg);
   }
-  ws.send(JSON.stringify({to: activeContact, message: payload, image_id: imageId || null, secret: isSecret}));
+  if (isGroupCid(activeContact)) {
+    ws.send(JSON.stringify({conversation_id: activeContact, message: msg, image_id: imageId || null}));
+  } else {
+    ws.send(JSON.stringify({to: activeContact, message: payload, image_id: imageId || null, secret: isSecret}));
+  }
   addMessage(activeContact, me, msg, imageId || null, true);
   updateSidebar();
   const inp = document.getElementById('msg-input');
@@ -1000,19 +1048,95 @@ function openNewChat() {
   fetch('/ele-api/api/accounts?token=' + token).then(r => r.json()).then(d => {
     const list = document.getElementById('account-list');
     list.innerHTML = '';
+    const selected = new Set();
+    const startBtn = document.createElement('button');
+    startBtn.id = 'modal-start';
+    startBtn.textContent = 'Start';
+    startBtn.disabled = true;
+    startBtn.style.cssText = 'margin-top:20px;background:linear-gradient(to bottom,#4a7ab8,#1a4a8a);color:#ddeeff;border:1px solid #0a3070;padding:10px;border-radius:3px;cursor:pointer;width:100%;font-size:13px;';
+    const secretCb = document.createElement('input');
+    secretCb.type = 'checkbox';
+    secretCb.id = 'modal-secret-cb';
+    secretCb.disabled = true;
+    secretCb.style.cssText = 'margin-right:8px;accent-color:#4a7ab8;';
+    secretCb.onchange = () => {
+      document.querySelectorAll('#account-list input[type=checkbox]').forEach(c => {
+        if (!c.checked) { c.disabled = secretCb.checked; c.closest('.account-item').style.opacity = secretCb.checked ? '0.4' : ''; }
+      });
+    };
+    const secretLabel = document.createElement('label');
+    secretLabel.htmlFor = 'modal-secret-cb';
+    secretLabel.textContent = 'Secret chat';
+    secretLabel.style.cssText = 'color:#aaccee;font-size:13px;cursor:pointer;';
+    const secretRow = document.createElement('div');
+    secretRow.id = 'modal-secret-row';
+    secretRow.style.cssText = 'margin-top:14px;padding-top:14px;margin-bottom:10px;border-top:1px solid rgba(100,150,220,0.3);display:flex;align-items:center;';
+    secretRow.appendChild(secretCb);
+    secretRow.appendChild(secretLabel);
+    startBtn.onclick = async () => {
+      if (!selected.size) return;
+      const wantSecret = secretCb.checked;
+      closeNewChat();
+      if (selected.size === 1) {
+        setActiveContact([...selected][0]);
+        if (wantSecret) await toggleSecretChat();
+      } else {
+        try {
+          const r = await fetch('/ele-api/api/conversation?token=' + token, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({members: [...selected]})
+          });
+          if (!r.ok) { alert('Failed to create group.'); return; }
+          const data = await r.json();
+          const cid = data.conversation_id;
+          groupNames[cid] = data.name || cid;
+          groupMembers[cid] = data.members || [];
+          if (!threads[cid]) threads[cid] = [];
+          updateSidebar();
+          setActiveContact(cid);
+        } catch(e) { alert('Error creating group.'); }
+      }
+    };
     (d.accounts || []).filter(u => u !== me).forEach(u => {
       const el = document.createElement('div');
       el.className = 'account-item';
+      el.style.cursor = 'pointer';
       const isOnline = onlineUsers.has(u);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.style.marginRight = '8px'; cb.style.accentColor = '#4a7ab8';
+      cb.onchange = () => {
+        if (cb.checked) selected.add(u); else selected.delete(u);
+        startBtn.disabled = selected.size === 0;
+        secretCb.disabled = selected.size !== 1;
+        if (selected.size !== 1) secretCb.checked = false;
+        secretRow.style.opacity = selected.size !== 1 ? '0.4' : '1';
+        if (secretCb.checked) {
+          document.querySelectorAll('#account-list input[type=checkbox]').forEach(c => {
+            if (c !== cb) { c.disabled = true; c.closest('.account-item').style.opacity = '0.4'; }
+          });
+        } else {
+          document.querySelectorAll('#account-list input[type=checkbox]').forEach(c => {
+            c.disabled = false; c.closest('.account-item').style.opacity = '';
+          });
+        }
+      };
+      el.onclick = (e) => { if (e.target !== cb) { cb.checked = !cb.checked; cb.onchange(); } };
       el.innerHTML = '<div class="convo-online' + (isOnline ? ' on' : '') + '"></div><div class="convo-avatar" style="background:' + avatarColor(u) + ';width:24px;height:24px;font-size:10px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#cce;">' + escHtml(initials(u)) + '</div>' + escHtml(u);
-      el.onclick = () => { closeNewChat(); setActiveContact(u); };
+      el.insertBefore(cb, el.firstChild);
       list.appendChild(el);
     });
+    const cancel = document.getElementById('modal-cancel');
+    cancel.parentNode.insertBefore(secretRow, cancel);
+    cancel.parentNode.insertBefore(startBtn, cancel);
     document.getElementById('modal-overlay').classList.add('open');
   }).catch(() => {});
 }
 function closeNewChat() {
   document.getElementById('modal-overlay').classList.remove('open');
+  const sb = document.getElementById('modal-start');
+  if (sb) sb.remove();
+  const sr = document.getElementById('modal-secret-row');
+  if (sr) sr.remove();
 }
 
 // ── Transport / UI ───────────────────────────────────────────────────────────
@@ -1053,6 +1177,7 @@ function updateChatHeader() {
 async function toggleSecretChat() {
   document.getElementById('hamburger-menu').classList.remove('open');
   if (!activeContact) return;
+  if (isGroupCid(activeContact)) return;
   const isSecret = secretChats.has(activeContact);
   const newSecret = !isSecret;
   try {
@@ -1090,7 +1215,7 @@ function openSettings() {
 }
 function openAbout() {
   document.getElementById('hamburger-menu').classList.remove('open');
-  document.getElementById('about-version').textContent = 'v1.3.0';
+  document.getElementById('about-version').textContent = 'v1.3.3';
   document.getElementById('about-server').textContent = 'Server: ' + location.hostname + ' · ' + (document.getElementById('transport-label').textContent || 'Unknown');
   document.getElementById('about-overlay').classList.add('open');
 }
