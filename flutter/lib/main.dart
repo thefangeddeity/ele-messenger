@@ -259,6 +259,8 @@ class _ChatShellState extends State<ChatShell> {
   Timer? _recTimer;
   final _scroll  = ScrollController();
   final Map<String, bool> _secretChats = {};
+  final Map<String, String> _groupNames = {};
+  final Map<String, List<String>> _groupMembers = {};
 
   @override
   void initState() {
@@ -314,6 +316,22 @@ class _ChatShellState extends State<ChatShell> {
         setState(() => _threads.addAll(grouped));
       }
     } catch (_) {}
+    // Load group conversation metadata
+    try {
+      final res2 = await http.get(Uri.parse('$kApiBase/api/conversations?token=${widget.token}'));
+      if (res2.statusCode == 200) {
+        final convos = (jsonDecode(res2.body)['conversations'] as List).cast<Map<String, dynamic>>();
+        for (final c in convos) {
+          final cid = c['conversation_id'] as String;
+          if (_cidIsGroup(cid)) {
+            _groupNames[cid] = c['name'] as String? ?? cid;
+            _groupMembers[cid] = List<String>.from(c['members'] as List? ?? []);
+            _threads.putIfAbsent(cid, () => []);
+          }
+        }
+        if (mounted) setState(() {});
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadHistory(String contact) async {
@@ -340,14 +358,34 @@ class _ChatShellState extends State<ChatShell> {
           if (with_ != null) setState(() => _secretChats[with_] = true);
           return;
         }
+        if (msg['type'] == 'conversation_created') {
+          final cid = msg['conversation_id'] as String?;
+          if (cid != null && _cidIsGroup(cid)) {
+            setState(() {
+              _groupNames[cid] = msg['name'] as String? ?? cid;
+              _groupMembers[cid] = List<String>.from(msg['members'] as List? ?? []);
+              _threads.putIfAbsent(cid, () => []);
+            });
+          }
+          return;
+        }
+        if (msg['type'] == 'member_added') {
+          final cid = msg['conversation_id'] as String?;
+          if (cid != null) {
+            setState(() => _groupMembers[cid] = List<String>.from(msg['members'] as List? ?? []));
+          }
+          return;
+        }
         final from = msg['from'] as String?;
-        if (from == null) return;
-        final entry = {'from': from, 'message': msg['message'] ?? '', 'image_id': msg['image_id'], 'ts': DateTime.now().toUtc().toIso8601String()};
+        if (from == null || from == 'server') return;
+        final incomingCid = msg['conversation_id'] as String?;
+        final effectiveCid = incomingCid ?? from;
+        final entry = {'from': from, 'message': msg['message'] ?? '', 'image_id': msg['image_id'], 'ts': DateTime.now().toUtc().toIso8601String(), 'conversation_id': effectiveCid};
         setState(() {
-          _threads.putIfAbsent(from, () => []).add(entry);
-          if (_active != from) _unread[from] = (_unread[from] ?? 0) + 1;
+          _threads.putIfAbsent(effectiveCid, () => []).add(entry);
+          if (_active != effectiveCid) _unread[effectiveCid] = (_unread[effectiveCid] ?? 0) + 1;
         });
-        if (_active == from) _scrollBottom();
+        if (_active == effectiveCid) _scrollBottom();
       },
       onDone: () { setState(() => _wsConnected = false); Future.delayed(const Duration(seconds: 3), _connectWs); },
       onError: (_) { setState(() => _wsConnected = false); Future.delayed(const Duration(seconds: 3), _connectWs); });
@@ -364,7 +402,10 @@ class _ChatShellState extends State<ChatShell> {
   void _send() {
     final msg = _msgCtrl.text.trim();
     if (msg.isEmpty || _active == null || _ws == null) return;
-    _ws!.sink.add(jsonEncode({'to': _active, 'message': msg}));
+    final payload = _cidIsGroup(_active!)
+        ? {'conversation_id': _active, 'message': msg}
+        : {'to': _active, 'message': msg};
+    _ws!.sink.add(jsonEncode(payload));
     final entry = {'from': widget.username, 'message': msg, 'ts': DateTime.now().toUtc().toIso8601String()};
     setState(() => _threads.putIfAbsent(_active!, () => []).add(entry));
     _msgCtrl.clear();
@@ -373,7 +414,10 @@ class _ChatShellState extends State<ChatShell> {
 
   void _sendAudio(String imageId) {
     if (_active == null || _ws == null) return;
-    _ws!.sink.add(jsonEncode({'to': _active, 'message': '', 'image_id': imageId}));
+    final payload = _cidIsGroup(_active!)
+        ? {'conversation_id': _active, 'message': '', 'image_id': imageId}
+        : {'to': _active, 'message': '', 'image_id': imageId};
+    _ws!.sink.add(jsonEncode(payload));
     final entry = {'from': widget.username, 'to': _active, 'message': '', 'image_id': imageId, 'ts': DateTime.now().toUtc().toIso8601String()};
     setState(() => _threads.putIfAbsent(_active!, () => []).add(entry));
     _scrollBottom();
@@ -425,6 +469,10 @@ class _ChatShellState extends State<ChatShell> {
   List<String> get _activeContacts {
     final result = <String>[];
     for (final cid in _threads.keys) {
+      if (_cidIsGroup(cid)) {
+        result.add(cid);
+        continue;
+      }
       final peer = _peerFromCid(cid);
       if (peer == null) continue;
       if (_threads[cid]!.isEmpty && cid != _active) continue;
@@ -438,6 +486,7 @@ class _ChatShellState extends State<ChatShell> {
     return parts.firstWhere((p) => p != widget.username, orElse: () => parts[0]);
   }
   bool _cidIsSecret(String cid) => cid.startsWith('secret:');
+  bool _cidIsGroup(String cid) => !cid.contains(':');
 
   @override
   void dispose() {
@@ -702,7 +751,7 @@ class _ChatShellState extends State<ChatShell> {
                         child: CheckboxListTile(
                           value: selected.contains(name),
                           onChanged: disabled ? null : (v) => setS(() {
-                            if (v == true) { selected.clear(); selected.add(name); } else selected.remove(name);
+                            if (v == true) { selected.add(name); } else selected.remove(name);
                           }),
                           title: Text(name, style: TextStyle(
                             color: disabled ? const Color(0xFF3A5878) : const Color(0xFFAACCEE),
@@ -718,10 +767,10 @@ class _ChatShellState extends State<ChatShell> {
                 const Divider(color: Color(0xFF5A7AB8), thickness: 1, height: 24),
                 CheckboxListTile(
                   value: isSecret,
-                  onChanged: selected.length > 1 ? null : (v) => setS(() => isSecret = v ?? false),
+                  onChanged: selected.length == 1 ? (v) => setS(() => isSecret = v ?? false) : null,
                   title: Text('Secret chat',
                     style: TextStyle(
-                      color: selected.length > 1 ? const Color(0xFF3A5878) : const Color(0xFFAACC88),
+                      color: selected.length != 1 ? const Color(0xFF3A5878) : const Color(0xFFAACC88),
                       fontSize: 13)),
                   secondary: const Icon(Icons.lock, color: Color(0xFFAACC88), size: 16),
                   activeColor: const Color(0xFFAACC88),
@@ -748,7 +797,26 @@ class _ChatShellState extends State<ChatShell> {
                 } else if (selected.length == 1) {
                   await _selectContact(selected.first);
                 } else {
-                  for (final c in selected) await _selectContact(c);
+                  // Group chat — call server to create conversation
+                  try {
+                    final res = await http.post(
+                      Uri.parse('$kApiBase/api/conversation?token=${widget.token}'),
+                      headers: {'Content-Type': 'application/json'},
+                      body: jsonEncode({'members': selected.toList()}));
+                    if (res.statusCode == 200) {
+                      final data = jsonDecode(res.body);
+                      final cid = data['conversation_id'] as String;
+                      final name = data['name'] as String;
+                      final members = List<String>.from(data['members'] as List);
+                      setState(() {
+                        _groupNames[cid] = name;
+                        _groupMembers[cid] = members;
+                        _threads.putIfAbsent(cid, () => []);
+                        _active = cid;
+                        _activePeer = null;
+                      });
+                    }
+                  } catch (_) {}
                 }
               },
               child: const Text('Start', style: TextStyle(color: kAccent))),
@@ -757,14 +825,20 @@ class _ChatShellState extends State<ChatShell> {
 
   Widget _buildConvoRow(String name) {
     final isActive = _active == name;
-    final isOnline = _online.contains(_peerFromCid(name) ?? name);
+    final isGroup  = _cidIsGroup(name);
+    final peer     = isGroup ? null : _peerFromCid(name);
+    final displayName = isGroup ? (_groupNames[name] ?? name) : (peer ?? name);
+    final isOnline = isGroup ? false : _online.contains(peer ?? name);
     final unread   = _unread[name] ?? 0;
     final msgs     = _threads[name] ?? [];
     final isSecret = _cidIsSecret(name);
     final preview  = msgs.isNotEmpty ? msgs.last['message'] as String : '';
     final ts       = msgs.isNotEmpty ? formatConvoTime(msgs.last['ts'] as String) : '';
     return GestureDetector(
-      onTap: () { final peer = _peerFromCid(name); if (peer != null) _selectCid(name, peer); },
+      onTap: () {
+        if (isGroup) { setState(() { _active = name; _activePeer = null; _unread.remove(name); }); _scrollBottom(); }
+        else if (peer != null) _selectCid(name, peer);
+      },
       child: Container(
         height: 72,
         padding: EdgeInsets.only(left: isActive ? 11 : 14, right: 14, top: 10, bottom: 10),
@@ -778,13 +852,16 @@ class _ChatShellState extends State<ChatShell> {
             decoration: BoxDecoration(
               color: isOnline ? kOnline : const Color(0xFF555555), shape: BoxShape.circle,
               border: Border.all(color: isOnline ? const Color(0xFF3A9000) : const Color(0xFF444444)))),
-          CircleAvatar(radius: 20, backgroundColor: avatarColor(_peerFromCid(name) ?? name),
-            child: Text((_peerFromCid(name) ?? name)[0].toUpperCase(),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
+          isGroup
+              ? CircleAvatar(radius: 20, backgroundColor: const Color(0xFF4A4A8A),
+                  child: const Icon(Icons.group, color: Colors.white, size: 18))
+              : CircleAvatar(radius: 20, backgroundColor: avatarColor(displayName),
+                  child: Text(displayName[0].toUpperCase(),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
             Row(children: [
-              Text(_peerFromCid(name) ?? name, style: TextStyle(fontSize: 14,
+              Text(displayName, style: TextStyle(fontSize: 14,
                 color: unread > 0 ? kTextPrimary : const Color(0xFFAACCEE),
                 fontWeight: unread > 0 ? FontWeight.bold : FontWeight.normal)),
               if (isSecret) ...[
@@ -832,7 +909,7 @@ class _ChatShellState extends State<ChatShell> {
         Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 8),
           decoration: BoxDecoration(
             color: _online.contains(_activePeer ?? '') ? kOnline : const Color(0xFF555555), shape: BoxShape.circle)),
-        Text('Chat with ${_activePeer ?? _active!}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
+        Text(_active != null && _cidIsGroup(_active!) ? (_groupNames[_active!] ?? _active!) : 'Chat with ${_activePeer ?? _active!}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFAACCEE))),
         if (_cidIsSecret(_active!)) ...[
           const SizedBox(width: 6),
           const Icon(Icons.lock, color: Color(0xFFAACC88), size: 14),

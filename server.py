@@ -1,4 +1,4 @@
-# ELE Messenger - server.py v1.3.2
+# ELE Messenger - server.py v1.3.3
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
@@ -76,6 +76,11 @@ def init_db():
         """)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_convo_members ON conversation_members(username)")
+
+        # Add name column to conversations if missing (group chat)
+        convo_cols = [r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()]
+        if "name" not in convo_cols:
+            conn.execute("ALTER TABLE conversations ADD COLUMN name TEXT")
 
         # --- Migration from old schema ---
         # Check if old messages table has to_user column
@@ -343,6 +348,8 @@ async def delete_history(other_user: str, token: str = None, secret: bool = Fals
     cid = convo_id(username, other_user, secret=secret)
     with get_db() as conn:
         conn.execute("DELETE FROM messages WHERE conversation_id = ?", (cid,))
+        conn.execute("DELETE FROM conversation_members WHERE conversation_id = ?", (cid,))
+        conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
         conn.commit()
     payload = {"type": "chat_cleared", "with": username}
     if other_user in connected_clients:
@@ -372,6 +379,103 @@ async def get_pubkey(username: str, token: str = None):
         raise HTTPException(404, "pubkey not found")
     return {"pubkey": row["pubkey"]}
 
+@app.get("/api/conversations")
+async def get_conversations(token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    with get_db() as conn:
+        convo_rows = conn.execute(
+            "SELECT conversation_id FROM conversation_members WHERE username = ?",
+            (username,)
+        ).fetchall()
+        convo_ids = [r["conversation_id"] for r in convo_rows]
+        result = []
+        for cid in convo_ids:
+            meta = conn.execute("SELECT id, secret, name FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not meta:
+                continue
+            members = conn.execute(
+                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+            ).fetchall()
+            member_list = [m["username"] for m in members]
+            result.append({
+                "conversation_id": cid,
+                "name": meta["name"] or ", ".join(member_list),
+                "members": member_list,
+                "secret": bool(meta["secret"])
+            })
+    return {"conversations": result}
+
+@app.post("/api/conversation")
+async def create_conversation(data: dict, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    members = data.get("members", [])
+    name = data.get("name", "").strip() or None
+    if not isinstance(members, list) or len(members) < 1:
+        raise HTTPException(400, "members list required")
+    all_members = list(dict.fromkeys([username] + members))  # dedupe, preserve order
+    cid = str(uuid.uuid4())
+    auto_name = name or ", ".join(all_members)
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, secret, name) VALUES (?, 0, ?)",
+            (cid, auto_name if not name else name)
+        )
+        for m in all_members:
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                (cid, m)
+            )
+        conn.commit()
+    for m in all_members:
+        if m in connected_clients:
+            await connected_clients[m].send_json({
+                "type": "conversation_created",
+                "conversation_id": cid,
+                "name": auto_name if not name else name,
+                "members": all_members,
+                "created_by": username
+            })
+    return {"conversation_id": cid, "name": auto_name if not name else name, "members": all_members}
+
+@app.post("/api/conversation/{cid}/members")
+async def add_member(cid: str, data: dict, token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    new_member = data.get("username", "").strip()
+    if not new_member:
+        raise HTTPException(400, "username required")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, name FROM conversations WHERE id = ?", (cid,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "conversation not found")
+        caller = conn.execute(
+            "SELECT username FROM conversation_members WHERE conversation_id = ? AND username = ?",
+            (cid, username)
+        ).fetchone()
+        if not caller:
+            raise HTTPException(403, "not a member")
+        conn.execute(
+            "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+            (cid, new_member)
+        )
+        conn.commit()
+        members = conn.execute(
+            "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+        ).fetchall()
+        member_list = [m["username"] for m in members]
+    notify = {"type": "member_added", "conversation_id": cid, "username": new_member, "members": member_list}
+    for m in member_list:
+        if m in connected_clients:
+            await connected_clients[m].send_json(notify)
+    return {"status": "ok", "members": member_list}
+
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     token = websocket.query_params.get("token")
@@ -388,14 +492,43 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 await websocket.send_json({"type": "pong"})
                 continue
             target = data.get("to")
+            cid_direct = data.get("conversation_id")
             message = data.get("message") or ""
             image_id = data.get("image_id")
             secret = 1 if data.get("secret") else 0
-            if target and (message or image_id):
+            if cid_direct and (message or image_id):
+                # Group (or explicit cid) message — fan out to all members
+                ts = datetime.now().isoformat()
+                with get_db() as conn:
+                    row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid_direct,)).fetchone()
+                    if not row:
+                        await websocket.send_json({"from": "server", "message": "conversation not found"})
+                        continue
+                    member_rows = conn.execute(
+                        "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid_direct,)
+                    ).fetchall()
+                    member_list = [m["username"] for m in member_rows]
+                    conn.execute(
+                        "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) VALUES (?, ?, ?, ?, ?, ?)",
+                        (cid_direct, username, message, image_id, ts, secret)
+                    )
+                    conn.commit()
+                payload = {"from": username, "message": message, "image_id": image_id, "secret": bool(secret), "conversation_id": cid_direct}
+                offline = []
+                for m in member_list:
+                    if m == username:
+                        continue
+                    if m in connected_clients:
+                        await connected_clients[m].send_json(payload)
+                    else:
+                        offline.append(m)
+                if offline:
+                    await websocket.send_json({"from": "server", "message": f"{", ".join(offline)} not online"})
+            elif target and (message or image_id):
+                # 1:1 message — legacy path
                 cid = convo_id(username, target, secret=bool(secret))
                 ts = datetime.now().isoformat()
                 with get_db() as conn:
-                    # Ensure conversation and members exist
                     conn.execute(
                         "INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
                         (cid, secret)
@@ -413,16 +546,16 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                         (cid, username, message, image_id, ts, secret)
                     )
                     conn.commit()
-            if target in connected_clients:
-                await connected_clients[target].send_json({
-                    "from": username,
-                    "message": message,
-                    "image_id": image_id,
-                    "secret": bool(secret),
-                    "conversation_id": cid
-                })
-            else:
-                await websocket.send_json({"from": "server", "message": f"{target} is not online."})
+                if target in connected_clients:
+                    await connected_clients[target].send_json({
+                        "from": username,
+                        "message": message,
+                        "image_id": image_id,
+                        "secret": bool(secret),
+                        "conversation_id": cid
+                    })
+                else:
+                    await websocket.send_json({"from": "server", "message": f"{target} is not online."})
     except WebSocketDisconnect:
         del connected_clients[username]
         connect_log.append({"time": datetime.now().isoformat(), "event": f"{username} disconnected"})
