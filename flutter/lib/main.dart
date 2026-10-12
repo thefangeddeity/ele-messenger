@@ -37,7 +37,11 @@ Color avatarColor(String name) {
   return kAvatarColors[h % kAvatarColors.length];
 }
 
-String kServerHost = '<node>.<tailnet>.ts.net';
+// Empty by default, deliberately: this repo is public and a default must
+// not name a real machine. The host is a SETTING -- it is read from
+// SharedPreferences at startup and editable in the UI -- so the only
+// thing hardcoding it bought was leaking which box runs the server.
+String kServerHost = '';
 String get kApiBase => 'https://$kServerHost/ele-api';
 String get kWsBase  => 'wss://$kServerHost/ele-ws';
 
@@ -81,7 +85,7 @@ void main() async {
   MediaKit.ensureInitialized();
   JustAudioMediaKit.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  kServerHost = prefs.getString('server_host') ?? '<node>.<tailnet>.ts.net';
+  kServerHost = prefs.getString('server_host') ?? '';
   runApp(const ELEApp());
 }
 

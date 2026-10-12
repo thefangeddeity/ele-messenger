@@ -7,3 +7,9 @@ debian/ele-messenger/
 debian/debhelper-build-stamp
 debian/files
 debian/*.substvars
+
+# Node-local runtime config. This repo is PUBLIC and config.json names this
+# machine's tailnet and LAN addresses. Only eleadmin.py reads them, purely to
+# display, and load_config() already returns {} when the file is absent -- so
+# a fresh clone works without it. Copy config.example.json and fill it in.
+config.json

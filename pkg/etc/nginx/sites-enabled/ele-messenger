@@ -1,3 +1,11 @@
+# EXAMPLE server block, not installed by the package (debian/install
+# ships sites-available/ele-messenger, which is locations only and names
+# no host). Kept as documentation of how to wire the snippet into a TLS
+# vhost. Substitute your own hostname; this repo is public, so it must
+# not carry a real one.
+#
+# The locations are all under /ele*, which is what lets another app own
+# the root of the same origin -- see the livecam viewer on this node.
 server {
     listen 443 ssl;
     server_name <node>.<tailnet>.ts.net;
