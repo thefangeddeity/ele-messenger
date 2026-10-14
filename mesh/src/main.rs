@@ -114,28 +114,43 @@ fn url_part(s: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "linux")]
-fn spawn_ble(node: Arc<node::Node>) {
+/// Keeps a transport running: restarts it 10 s after it fails, backing off
+/// to once a minute while it keeps failing the same way (no adapter on this
+/// machine), and warns once per distinct error rather than every retry.
+fn supervise<F, Fut>(name: &'static str, start: F)
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    use std::time::Duration;
     tokio::spawn(async move {
+        let mut last = String::new();
         loop {
-            if let Err(e) = ble_linux::run(node.clone()).await {
-                tracing::warn!("ble transport down, retrying in 10 s: {e:#}");
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let err = match start().await {
+                Ok(()) => String::from("stopped"),
+                Err(e) => format!("{e:#}"),
+            };
+            let delay = if err == last {
+                tracing::debug!("{name} transport still down: {err}");
+                Duration::from_secs(60)
+            } else {
+                tracing::warn!("{name} transport down, retrying: {err}");
+                Duration::from_secs(10)
+            };
+            last = err;
+            tokio::time::sleep(delay).await;
         }
     });
 }
 
+#[cfg(target_os = "linux")]
+fn spawn_ble(node: Arc<node::Node>) {
+    supervise("ble", move || ble_linux::run(node.clone()));
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn spawn_ble(node: Arc<node::Node>) {
-    tokio::spawn(async move {
-        loop {
-            if let Err(e) = ble_central::run(node.clone()).await {
-                tracing::warn!("ble transport down, retrying in 10 s: {e:#}");
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        }
-    });
+    supervise("ble", move || ble_central::run(node.clone()));
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -170,14 +185,7 @@ async fn main() -> Result<()> {
             tokio::spawn(async move { n.maintenance().await });
             if !no_lan {
                 let n = node.clone();
-                tokio::spawn(async move {
-                    loop {
-                        if let Err(e) = lan::run(n.clone(), lan_port).await {
-                            tracing::warn!("lan transport down, retrying in 10 s: {e:#}");
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    }
-                });
+                supervise("lan", move || lan::run(n.clone(), lan_port));
             }
             if !no_ble {
                 spawn_ble(node.clone());

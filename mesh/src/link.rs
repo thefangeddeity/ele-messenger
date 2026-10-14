@@ -79,6 +79,9 @@ where
         return Ok(());
     };
     tracing::info!("{transport} link up: {} ({label})", hex::encode(peer));
+    // Leaves the link table however this future ends, including being
+    // dropped by a caller's select! when its transport pump finishes first.
+    let _guard = LinkGuard { node: node.clone(), id: link_id, transport, peer };
 
     let wts = ts.clone();
     let writer = tokio::spawn(async move {
@@ -117,9 +120,24 @@ where
         r = reader => r,
         w = writer => w.map_err(anyhow::Error::from).and_then(|x| x),
     };
-    node.remove_link(link_id);
-    tracing::info!("{transport} link down: {} ({:?})", hex::encode(peer), result.as_ref().err());
+    if let Err(e) = result {
+        tracing::debug!("{transport} link to {} ended: {e:#}", hex::encode(peer));
+    }
     Ok(())
+}
+
+struct LinkGuard {
+    node: Arc<Node>,
+    id: u64,
+    transport: &'static str,
+    peer: NodeId,
+}
+
+impl Drop for LinkGuard {
+    fn drop(&mut self) {
+        self.node.remove_link(self.id);
+        tracing::info!("{} link down: {}", self.transport, hex::encode(self.peer));
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +191,34 @@ mod tests {
         assert!(settle(|| a.links().len() == 1 && c.links().len() == 1).await);
         a.post("home", "a", "two hops").unwrap();
         assert!(settle(|| count(&c) == 1).await, "flood did not reach c");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_peer_is_dropped() {
+        let (a, b) = (node("same passphrase"), node("same passphrase"));
+        let (sa, sb) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
+        // The far end completes the handshake, then holds the stream open
+        // and says nothing, like a peer whose radio reset under it.
+        let (mut r, mut w) = tokio::io::split(sb);
+        handshake(&mut r, &mut w, false, &b).await.unwrap();
+        assert!(settle(|| a.links().len() == 1).await);
+        tokio::time::sleep(IDLE_TIMEOUT + Duration::from_secs(1)).await;
+        assert!(settle(|| a.links().is_empty()).await, "silent link still up");
+        drop((r, w));
+    }
+
+    #[tokio::test]
+    async fn dropped_link_leaves_the_table() {
+        let (a, b) = (node("same passphrase"), node("same passphrase"));
+        let (sa, sb) = tokio::io::duplex(64 * 1024);
+        // As in the BLE central: the link future sits in a select! with the
+        // transport pumps and is dropped when one of them finishes first.
+        let ta = tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
+        tokio::spawn(run(sb, false, "test", "pipe".into(), b.clone()));
+        assert!(settle(|| a.links().len() == 1).await);
+        ta.abort();
+        assert!(settle(|| a.links().is_empty()).await, "aborted link still listed");
     }
 
     #[tokio::test]

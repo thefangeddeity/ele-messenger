@@ -74,14 +74,20 @@ fn dial_key(s: &str) -> NodeId {
 async fn dial(node: &Arc<Node>, _adapter: &Adapter, p: Peripheral) -> Result<()> {
     tokio::time::timeout(CONNECT_TIMEOUT, p.connect()).await.context("connect timed out")??;
     let result = async {
-        p.discover_services().await?;
-        let ch = p
-            .characteristics()
-            .into_iter()
-            .find(|c| c.uuid == Uuid::from_u128(STREAM_UUID))
-            .context("peer has no ELE stream characteristic")?;
-        p.subscribe(&ch).await?;
-        let mut notes = p.notifications().await?;
+        // Any setup step can hang on a confused peer; a dial stuck here
+        // would block every later dial to the same node.
+        let (ch, mut notes) = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            p.discover_services().await?;
+            let ch = p
+                .characteristics()
+                .into_iter()
+                .find(|c| c.uuid == Uuid::from_u128(STREAM_UUID))
+                .context("peer has no ELE stream characteristic")?;
+            p.subscribe(&ch).await?;
+            anyhow::Ok((ch.clone(), p.notifications().await?))
+        })
+        .await
+        .context("GATT setup timed out")??;
 
         // Bridge the characteristic to a byte stream for the link layer.
         let (ours, theirs) = tokio::io::duplex(64 * 1024);

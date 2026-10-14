@@ -10,6 +10,7 @@ use bluer::gatt::local::{
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
 use bluer::{Adapter, Address, DiscoveryFilter, DiscoveryTransport, Uuid};
 use futures::{StreamExt, pin_mut};
+use rand::RngExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use crate::proto::NodeId;
 const SCAN_WINDOW: Duration = Duration::from_secs(6);
 const SCAN_CHECK: Duration = Duration::from_secs(2);
 const SCAN_IDLE: Duration = Duration::from_secs(9);
+const STALE_AFTER: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub async fn run(node: Arc<Node>) -> Result<()> {
@@ -30,17 +32,19 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
     adapter.set_powered(true).await?;
     tracing::info!("ble: adapter {} ({})", adapter.name(), adapter.address().await?);
 
-    let peripheral = serve(node.clone(), adapter.clone());
-    let central = scan(node, adapter);
+    // The GATT service must be registered before the first advertisement.
+    let (control, handle) = characteristic_control();
+    let _app = adapter.serve_gatt_application(gatt_app(handle)).await.context("registering GATT service")?;
+    let peripheral = serve(node.clone(), control);
+    let central = rendezvous(node, adapter);
     tokio::select! {
         r = peripheral => r,
         r = central => r,
     }
 }
 
-async fn serve(node: Arc<Node>, adapter: Adapter) -> Result<()> {
-    let (control, handle) = characteristic_control();
-    let app = Application {
+fn gatt_app(handle: bluer::gatt::local::CharacteristicControlHandle) -> Application {
+    Application {
         services: vec![Service {
             uuid: Uuid::from_u128(SERVICE_UUID),
             primary: true,
@@ -63,19 +67,10 @@ async fn serve(node: Arc<Node>, adapter: Adapter) -> Result<()> {
             ..Default::default()
         }],
         ..Default::default()
-    };
-    let _app = adapter.serve_gatt_application(app).await.context("registering GATT service")?;
-    let _adv = adapter
-        .advertise(Advertisement {
-            service_uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
-            discoverable: Some(true),
-            local_name: Some(ble::local_name(&node.identity.id)),
-            ..Default::default()
-        })
-        .await
-        .context("starting advertisement")?;
-    tracing::info!("ble: advertising as {}", ble::local_name(&node.identity.id));
+    }
+}
 
+async fn serve(node: Arc<Node>, control: bluer::gatt::local::CharacteristicControl) -> Result<()> {
     // A central opens the stream in two halves (write, then subscribe, or the
     // reverse); pair them by address before starting the link.
     let mut halves: HashMap<Address, (Option<CharacteristicReader>, Option<CharacteristicWriter>)> = HashMap::new();
@@ -114,20 +109,41 @@ fn addr_key(addr: Address) -> NodeId {
     k
 }
 
-/// Scans in short windows, and not at all while a BLE link or dial is up:
-/// some combo chips (Realtek RTL8821C) hang and reset when asked to scan
-/// while connected, and an idle radio saves battery. Inbound peers can still
-/// reach us through the advertisement meanwhile.
-async fn scan(node: Arc<Node>, adapter: Adapter) -> Result<()> {
-    adapter
-        .set_discovery_filter(DiscoveryFilter {
-            uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
-            transport: DiscoveryTransport::Le,
-            ..Default::default()
-        })
-        .await?;
+/// Alternates advertising and short scan windows, and never scans while any
+/// LE connection or BLE dial is up. Realtek RTL8821C combo chips time out on
+/// "LE set scan enable" (on or off) while connected and reset over USB,
+/// dropping every link; not advertising while scanning means nobody can
+/// connect mid-window. The idle phase is jittered so two nodes don't lock
+/// into the same rhythm and never hear each other. Adapter errors return,
+/// so the transport restarts on whatever adapter comes back.
+async fn rendezvous(node: Arc<Node>, adapter: Adapter) -> Result<()> {
+    let name = ble::local_name(&node.identity.id);
+    tracing::info!("ble: advertising as {name}");
+    let mut adv = None;
+    let mut stale = HashMap::new();
     loop {
-        if !node.transport_busy("ble") {
+        if adv.is_none() {
+            let a = Advertisement {
+                service_uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
+                discoverable: Some(true),
+                local_name: Some(name.clone()),
+                ..Default::default()
+            };
+            // Some controllers refuse a connectable advertisement while they
+            // hold a connection; try again next turn rather than giving up.
+            match adapter.advertise(a).await {
+                Ok(h) => adv = Some(h),
+                Err(e) => tracing::debug!("ble advertise: {e}"),
+            }
+        }
+        let jitter = Duration::from_millis(rand::rng().random_range(0..6000));
+        tokio::time::sleep(SCAN_IDLE + jitter).await;
+        reap_stale(&node, &adapter, &mut stale).await?;
+        if node.transport_busy("ble") || any_connected(&adapter).await? {
+            continue;
+        }
+        adv = None; // stop advertising for the scan window
+        {
             match scan_window(&node, &adapter).await {
                 Ok(found) => {
                     for (key, device) in found {
@@ -145,11 +161,55 @@ async fn scan(node: Arc<Node>, adapter: Adapter) -> Result<()> {
                 Err(e) => tracing::debug!("ble scan: {e:#}"),
             }
         }
-        tokio::time::sleep(SCAN_IDLE).await;
+        // Fails when the adapter is gone (USB reset renames hci0 to hci1).
+        adapter.is_powered().await.context("adapter lost")?;
     }
 }
 
+/// Drops connections that carry no link: a peer whose daemon died, or one
+/// left over from before our restart, keeps the radio connected and so
+/// blocks both advertising and scanning. ELE peers never pair, so paired
+/// devices (keyboards, headphones) are left alone.
+async fn reap_stale(node: &Node, adapter: &Adapter, since: &mut HashMap<Address, std::time::Instant>) -> Result<()> {
+    let linked: Vec<String> = node.links().into_iter().filter(|l| l.transport == "ble").map(|l| l.via).collect();
+    let mut seen = Vec::new();
+    for addr in adapter.device_addresses().await? {
+        let device = adapter.device(addr)?;
+        if !device.is_connected().await.unwrap_or(false)
+            || device.is_paired().await.unwrap_or(true)
+            || linked.contains(&addr.to_string())
+        {
+            continue;
+        }
+        seen.push(addr);
+        let first = *since.entry(addr).or_insert_with(std::time::Instant::now);
+        if first.elapsed() >= STALE_AFTER {
+            tracing::info!("ble: dropping idle connection from {addr}");
+            let _ = device.disconnect().await;
+            since.remove(&addr);
+        }
+    }
+    since.retain(|a, _| seen.contains(a));
+    Ok(())
+}
+
+async fn any_connected(adapter: &Adapter) -> Result<bool> {
+    for addr in adapter.device_addresses().await? {
+        if adapter.device(addr)?.is_connected().await.unwrap_or(false) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId, bluer::Device)>> {
+    adapter
+        .set_discovery_filter(DiscoveryFilter {
+            uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
+            transport: DiscoveryTransport::Le,
+            ..Default::default()
+        })
+        .await?;
     // Discovery runs while this stream is alive.
     let events = adapter.discover_devices().await?;
     pin_mut!(events);
@@ -161,10 +221,6 @@ async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId,
             ev = events.next() => if ev.is_none() { bail!("discovery stopped") },
             _ = &mut window => return Ok(Vec::new()),
             _ = tick.tick() => {}
-        }
-        if node.transport_busy("ble") {
-            // Someone connected to our advertisement mid-window.
-            return Ok(Vec::new());
         }
         let mut found = Vec::new();
         for addr in adapter.device_addresses().await? {
@@ -205,7 +261,7 @@ async fn dial(node: &Arc<Node>, device: bluer::Device) -> Result<()> {
     if !device.is_connected().await? {
         tokio::time::timeout(CONNECT_TIMEOUT, device.connect()).await.context("connect timed out")??;
     }
-    let result = async {
+    let setup = async {
         for _ in 0..50 {
             if device.is_services_resolved().await? {
                 break;
@@ -224,8 +280,11 @@ async fn dial(node: &Arc<Node>, device: bluer::Device) -> Result<()> {
             }
         }
         let ch = stream_char.context("peer has no ELE stream characteristic")?;
-        let reader = ch.notify_io().await?;
-        let writer = ch.write_io().await?;
+        anyhow::Ok((ch.notify_io().await?, ch.write_io().await?))
+    };
+    let result = async {
+        // A dial stuck in setup would block every later dial to this node.
+        let (reader, writer) = tokio::time::timeout(CONNECT_TIMEOUT, setup).await.context("GATT setup timed out")??;
         link::run(tokio::io::join(reader, writer), true, "ble", addr.to_string(), node.clone()).await
     }
     .await;

@@ -24,6 +24,7 @@ struct LinkInfo {
     transport: &'static str,
     label: String,
     since: Instant,
+    last_rx: Instant,
     tx: mpsc::Sender<Vec<u8>>,
 }
 
@@ -34,6 +35,8 @@ pub struct LinkStatus {
     pub via: String,
     pub initiator: bool,
     pub up_s: u64,
+    /// Seconds since the last frame from this peer.
+    pub heard_s: u64,
 }
 
 pub struct Node {
@@ -133,7 +136,8 @@ impl Node {
                 let _ = tx.try_send(b);
             }
         }
-        links.insert(id, LinkInfo { peer, initiator, transport, label, since: Instant::now(), tx });
+        let now = Instant::now();
+        links.insert(id, LinkInfo { peer, initiator, transport, label, since: now, last_rx: now, tx });
         Some(id)
     }
 
@@ -152,6 +156,7 @@ impl Node {
                 via: l.label.clone(),
                 initiator: l.initiator,
                 up_s: l.since.elapsed().as_secs(),
+                heard_s: l.last_rx.elapsed().as_secs(),
             })
             .collect()
     }
@@ -185,6 +190,9 @@ impl Node {
     }
 
     pub fn handle(self: &Arc<Self>, link: u64, msg: Wire) {
+        if let Some(l) = self.links.lock().unwrap().get_mut(&link) {
+            l.last_rx = Instant::now();
+        }
         match msg {
             Wire::Hello { version } => {
                 if version != PROTOCOL_VERSION {
