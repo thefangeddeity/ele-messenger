@@ -19,7 +19,9 @@ use crate::link;
 use crate::node::Node;
 use crate::proto::NodeId;
 
-const SCAN_EVERY: Duration = Duration::from_secs(5);
+const SCAN_WINDOW: Duration = Duration::from_secs(6);
+const SCAN_CHECK: Duration = Duration::from_secs(2);
+const SCAN_IDLE: Duration = Duration::from_secs(9);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub async fn run(node: Arc<Node>) -> Result<()> {
@@ -112,6 +114,10 @@ fn addr_key(addr: Address) -> NodeId {
     k
 }
 
+/// Scans in short windows, and not at all while a BLE link or dial is up:
+/// some combo chips (Realtek RTL8821C) hang and reset when asked to scan
+/// while connected, and an idle radio saves battery. Inbound peers can still
+/// reach us through the advertisement meanwhile.
 async fn scan(node: Arc<Node>, adapter: Adapter) -> Result<()> {
     adapter
         .set_discovery_filter(DiscoveryFilter {
@@ -120,15 +126,47 @@ async fn scan(node: Arc<Node>, adapter: Adapter) -> Result<()> {
             ..Default::default()
         })
         .await?;
+    loop {
+        if !node.transport_busy("ble") {
+            match scan_window(&node, &adapter).await {
+                Ok(found) => {
+                    for (key, device) in found {
+                        let n = node.clone();
+                        tokio::spawn(async move {
+                            let addr = device.address();
+                            let result = dial(&n, device).await;
+                            if let Err(e) = &result {
+                                tracing::debug!("ble dial {addr}: {e:#}");
+                            }
+                            n.end_dial(key, "ble", result.is_ok());
+                        });
+                    }
+                }
+                Err(e) => tracing::debug!("ble scan: {e:#}"),
+            }
+        }
+        tokio::time::sleep(SCAN_IDLE).await;
+    }
+}
+
+async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId, bluer::Device)>> {
     // Discovery runs while this stream is alive.
     let events = adapter.discover_devices().await?;
     pin_mut!(events);
-    let mut tick = tokio::time::interval(SCAN_EVERY);
+    let window = tokio::time::sleep(SCAN_WINDOW);
+    pin_mut!(window);
+    let mut tick = tokio::time::interval(SCAN_CHECK);
     loop {
         tokio::select! {
             ev = events.next() => if ev.is_none() { bail!("discovery stopped") },
+            _ = &mut window => return Ok(Vec::new()),
             _ = tick.tick() => {}
         }
+        if node.transport_busy("ble") {
+            // Someone connected to our advertisement mid-window.
+            return Ok(Vec::new());
+        }
+        let mut found = Vec::new();
         for addr in adapter.device_addresses().await? {
             let Ok(device) = adapter.device(addr) else { continue };
             // RSSI is only set for devices heard in the current discovery.
@@ -153,14 +191,11 @@ async fn scan(node: Arc<Node>, adapter: Adapter) -> Result<()> {
             if !node.try_begin_dial(key, "ble") {
                 continue;
             }
-            let n = node.clone();
-            tokio::spawn(async move {
-                let result = dial(&n, device).await;
-                if let Err(e) = &result {
-                    tracing::debug!("ble dial {addr}: {e:#}");
-                }
-                n.end_dial(key, "ble", result.is_ok());
-            });
+            found.push((key, device));
+        }
+        if !found.is_empty() {
+            // Returning drops the stream, so discovery is off before we connect.
+            return Ok(found);
         }
     }
 }

@@ -5,11 +5,12 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::identity::{self, NOISE_PARAMS};
-use crate::node::Node;
+use crate::node::{Node, SYNC_INTERVAL};
 use crate::proto::{NodeId, Wire};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const NOISE_MAX: usize = 65535;
+const IDLE_TIMEOUT: Duration = Duration::from_secs(3 * SYNC_INTERVAL.as_secs());
 
 async fn read_frame<R: AsyncRead + Unpin>(r: &mut R, buf: &mut Vec<u8>) -> Result<()> {
     let len = r.read_u16().await? as usize;
@@ -96,7 +97,12 @@ where
         let mut frame = Vec::new();
         let mut plain = vec![0u8; NOISE_MAX];
         loop {
-            read_frame(&mut r, &mut frame).await?;
+            // Peers send a summary every SYNC_INTERVAL, so silence means the
+            // other end is gone even if the transport never said so (a BLE
+            // adapter reset leaves the far side holding a dead connection).
+            tokio::time::timeout(IDLE_TIMEOUT, read_frame(&mut r, &mut frame))
+                .await
+                .context("peer silent")??;
             let n = ts.lock().unwrap().read_message(&frame, &mut plain)?;
             match Wire::decode(&plain[..n]) {
                 Ok(msg) => reader_node.handle(link_id, msg),

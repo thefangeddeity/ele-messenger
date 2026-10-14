@@ -100,6 +100,13 @@ impl Node {
         self.links.lock().unwrap().values().any(|l| &l.peer == peer && l.transport == transport)
     }
 
+    /// A link or dial on this transport is up or under way.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn transport_busy(&self, transport: &str) -> bool {
+        self.links.lock().unwrap().values().any(|l| l.transport == transport)
+            || self.dials.lock().unwrap().iter().any(|((_, t), d)| *t == transport && matches!(d, Dial::InProgress))
+    }
+
     /// One link per peer per transport. When both sides dialled, both keep the
     /// link whose initiator has the lower node id, so they agree without talking.
     pub fn add_link(

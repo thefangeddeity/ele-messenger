@@ -1,6 +1,12 @@
 # elemesh — the independent layer
 
-Status: Proposed (2026-10-13). Nothing here has run on two radios yet.
+Status: Accepted (2026-10-13), in part verified on hardware:
+- LAN (Linux ↔ Linux, through a home router): link, both directions,
+  offline catch-up.
+- BLE (Linux peripheral ↔ macOS central): link, both directions, offline
+  catch-up, and relay onward over LAN to a third node.
+- Not yet: router-less ad-hoc Wi-Fi, macOS peripheral, Windows, two
+  Linux nodes over BLE.
 
 ## Goal
 
@@ -71,8 +77,8 @@ whenever two devices' counters disagreed.
 ## Live delivery (controlled flood, borrowed from BitChat §4.2)
 
 A new entry, local or received, is pushed to every link except the one it
-arrived on. Each carries a TTL starting at 7, decremented per hop; a seen-set
-keyed by `(author, seq)` drops duplicates. Relays wait a random 10–220 ms
+arrived on. Each carries a TTL starting at 7, decremented per hop; the store's
+`(author, seq)` primary key drops duplicates, so only new entries relay. Relays wait a random 10–220 ms
 before forwarding so duplicate suppression usually wins. History sync
 covers anything the flood missed.
 
@@ -93,10 +99,13 @@ differs. Frames are `u16 length ‖ ciphertext` (Noise caps a message at
 larger than the link allows (BLE: MTU − 3 bytes, default 182).
 
 1. **BLE**: each node is GATT peripheral and central at once. One service
-   with one write characteristic (central → peripheral) and one notify
-   characteristic (peripheral → central). Advertisement carries the service
+   with one stream characteristic: the central writes to it, the peripheral
+   notifies on it. Advertisement carries the service
    UUID and `ele-<node id hex>` as the local name. If two nodes connect to
    each other twice, the link where the lower node id is central is kept.
+   Scanning runs in short windows and stops while any BLE link or dial is
+   up: Realtek RTL8821C combo chips time out on "LE set scan enable" while
+   connected and reset over USB, dropping every link.
    - Linux: `bluer` (BlueZ) for both roles.
    - macOS: `btleplug` central first; peripheral via CoreBluetooth
      (`objc2-core-bluetooth`) second. Command Line Tools are enough; no Xcode.
@@ -113,6 +122,7 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 | Situation | Behaviour |
 |-----------|-----------|
 | Bluetooth off or absent | daemon runs; local API works; status shows no BLE; LAN still tried |
+| Peer vanishes without a disconnect | link dropped after 45 s of silence (peers sync every 15 s) |
 | Link drops mid-sync | partial entries are kept (each is self-contained); next link resyncs |
 | Wrong passphrase | handshake fails; peer is ignored for 60 s, then retried |
 | Clock wrong on a node | display order off for that node's messages; sync unaffected |
@@ -124,17 +134,18 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 |------|-------|--------|
 | TTL | 7 | BitChat |
 | relay jitter | 10–220 ms | BitChat |
-| seen-set | 4096 entries | ours |
 | sync interval | 15 s | BitChat |
 | retention | 7 days, 10 000 entries per room | server.py keeps 7 days |
 | max text | 2 KiB | ours |
-| BLE chunk | 182 bytes | conservative default MTU |
+| BLE chunk | 180 bytes | under the 182-byte default MTU payload |
+| BLE scan | 6 s window, 9 s idle, none while linked | ours |
+| link idle timeout | 45 s | 3 × sync interval |
 | failed-handshake backoff | 60 s | ours |
 
 ## Not in this step
 
 Media, private 1:1 encryption beyond the mesh PSK, couriers (BitChat §6.2),
-battery duty-cycling of scans, iOS/Android.
+macOS/Windows peripheral role, iOS/Android.
 
 ## Licensing
 
