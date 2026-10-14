@@ -1,9 +1,11 @@
-# ELE Messenger - server.py v1.3.3
+# ELE Messenger - server.py v1.3.4
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+import bcrypt
+import time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "config.json")
@@ -21,6 +23,37 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def hash_pin(pin: str) -> str:
+    return bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
+
+def verify_pin(pin: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pin.encode(), hashed.encode())
+    except Exception:
+        return False
+
+# Rate limit tracking: {username: (fail_count, last_attempt_time)}
+login_attempts = {}
+
+def check_rate_limit(username: str) -> float:
+    if username not in login_attempts:
+        return 0
+    fail_count, last_time = login_attempts[username]
+    time_since = time.time() - last_time
+    backoff = 2 ** min(fail_count, 5)  # Max 32s backoff after 5 failures
+    remaining = max(0, backoff - time_since)
+    return remaining
+
+def record_failed_login(username: str):
+    if username not in login_attempts:
+        login_attempts[username] = (1, time.time())
+    else:
+        count, _ = login_attempts[username]
+        login_attempts[username] = (count + 1, time.time())
+
+def clear_login_attempts(username: str):
+    login_attempts.pop(username, None)
 
 def convo_id(user_a, user_b, secret=False):
     """Deterministic conversation ID for a pair of users."""
@@ -139,9 +172,10 @@ def init_db():
         # Default admin account
         count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         if count == 0:
+            hashed_pin = hash_pin("1234")
             conn.execute(
                 "INSERT INTO accounts (username, pin) VALUES (?, ?)",
-                ("admin", "1234")
+                ("admin", hashed_pin)
             )
         conn.commit()
 
@@ -176,7 +210,8 @@ async def register(data: dict):
         existing = conn.execute("SELECT username FROM accounts WHERE username = ?", (username,)).fetchone()
         if existing:
             raise HTTPException(409, "username taken")
-        conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)", (username, pin))
+        hashed_pin = hash_pin(pin)
+        conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)", (username, hashed_pin))
         conn.execute("DELETE FROM accounts WHERE username = ?", ("admin",))
         conn.commit()
     return {"status": "ok"}
@@ -185,10 +220,20 @@ async def register(data: dict):
 async def login(data: dict):
     username = data.get("username", "").strip()
     pin = data.get("pin", "").strip()
+
+    # Rate limiting
+    wait_time = check_rate_limit(username)
+    if wait_time > 0:
+        raise HTTPException(429, f"too many failed attempts, try again in {int(wait_time)+1}s")
+
     with get_db() as conn:
         row = conn.execute("SELECT pin FROM accounts WHERE username = ?", (username,)).fetchone()
-    if not row or row["pin"] != pin:
+
+    if not row or not verify_pin(pin, row["pin"]):
+        record_failed_login(username)
         raise HTTPException(401, "invalid credentials")
+
+    clear_login_attempts(username)
     token = secrets.token_hex(16)
     sessions[token] = username
     return {"token": token, "username": username}
