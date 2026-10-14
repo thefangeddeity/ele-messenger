@@ -66,9 +66,19 @@ where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (mut r, mut w) = tokio::io::split(stream);
-    let (peer, ts) = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut r, &mut w, initiator, &node))
+    let (peer, ts) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&mut r, &mut w, initiator, &node))
         .await
-        .context("handshake timed out")??;
+        .context("handshake timed out")
+        .and_then(|r| r)
+    {
+        Ok(x) => x,
+        Err(e) => {
+            // The usual cause is a different mesh passphrase; say so where
+            // people will look. Redial backoff keeps this to once a minute.
+            tracing::info!("{transport} handshake with {label} failed: {e:#}");
+            return Err(e);
+        }
+    };
     if peer == node.identity.id {
         bail!("connected to myself");
     }
