@@ -27,10 +27,16 @@ def get_db():
 def hash_pin(pin: str) -> str:
     return bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
 
-def verify_pin(pin: str, hashed: str) -> bool:
+def is_hashed(stored: str) -> bool:
+    return stored.startswith("$2")
+
+def verify_pin(pin: str, stored: str) -> bool:
+    if not is_hashed(stored):
+        # Accounts created before hashing still hold the plaintext PIN.
+        return secrets.compare_digest(pin, stored)
     try:
-        return bcrypt.checkpw(pin.encode(), hashed.encode())
-    except Exception:
+        return bcrypt.checkpw(pin.encode(), stored.encode())
+    except ValueError:
         return False
 
 # Rate limit tracking: {username: (fail_count, last_attempt_time)}
@@ -232,6 +238,11 @@ async def login(data: dict):
     if not row or not verify_pin(pin, row["pin"]):
         record_failed_login(username)
         raise HTTPException(401, "invalid credentials")
+
+    if not is_hashed(row["pin"]):
+        with get_db() as conn:
+            conn.execute("UPDATE accounts SET pin = ? WHERE username = ?", (hash_pin(pin), username))
+            conn.commit()
 
     clear_login_attempts(username)
     token = secrets.token_hex(16)
