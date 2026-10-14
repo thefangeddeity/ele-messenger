@@ -22,3 +22,14 @@ snow = "0.10.0"
 tokio = { version = "1.53.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17.4", features = ["bluetoothd"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+btleplug = "0.13.5"
+uuid = "1"
+
+[profile.release]
+strip = true
+lto = "thin"

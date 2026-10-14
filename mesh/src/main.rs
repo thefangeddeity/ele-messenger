@@ -1,4 +1,9 @@
 mod api;
+mod ble;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod ble_central;
+#[cfg(target_os = "linux")]
+mod ble_linux;
 mod identity;
 mod lan;
 mod link;
@@ -42,6 +47,8 @@ enum Cmd {
         lan_port: u16,
         #[arg(long)]
         no_lan: bool,
+        #[arg(long)]
+        no_ble: bool,
     },
     /// Post a message through the local daemon
     Send {
@@ -107,6 +114,35 @@ fn url_part(s: &str) -> String {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
+fn spawn_ble(node: Arc<node::Node>) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = ble_linux::run(node.clone()).await {
+                tracing::warn!("ble transport down, retrying in 10 s: {e:#}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+    });
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn spawn_ble(node: Arc<node::Node>) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = ble_central::run(node.clone()).await {
+                tracing::warn!("ble transport down, retrying in 10 s: {e:#}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn spawn_ble(_node: Arc<node::Node>) {
+    tracing::warn!("ble: not supported on this platform; using LAN only");
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     use std::io::IsTerminal;
@@ -123,7 +159,7 @@ async fn main() -> Result<()> {
             let me = identity::Identity::load_or_create(&dir)?;
             println!("node {} ready in {}", hex::encode(me.id), dir.display());
         }
-        Cmd::Run { lan_port, no_lan } => {
+        Cmd::Run { lan_port, no_lan, no_ble } => {
             let dir = state_dir(&cli.state_dir)?;
             let psk = identity::derive_psk(&read_passphrase(&dir)?)?;
             let me = identity::Identity::load_or_create(&dir)?;
@@ -142,6 +178,9 @@ async fn main() -> Result<()> {
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     }
                 });
+            }
+            if !no_ble {
+                spawn_ble(node.clone());
             }
             api::serve(node, cli.api).await?;
         }
