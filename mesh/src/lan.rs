@@ -12,6 +12,17 @@ use crate::node::Node;
 use crate::proto::NodeId;
 
 const MAGIC: &[u8; 4] = b"ELEM";
+
+/// Stops the listener and beacon when `run` returns, so a retry can rebind.
+struct TaskGuard(Vec<tokio::task::JoinHandle<()>>);
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        for t in &self.0 {
+            t.abort();
+        }
+    }
+}
 const BEACON_EVERY: Duration = Duration::from_secs(5);
 
 fn beacon(node: &Node, tcp_port: u16) -> Vec<u8> {
@@ -53,8 +64,9 @@ pub async fn run(node: Arc<Node>, port: u16) -> Result<()> {
     udp.set_broadcast(true)?;
     tracing::info!("lan: listening on tcp/udp {port}");
 
+    let mut tasks = TaskGuard(Vec::new());
     let n = node.clone();
-    tokio::spawn(async move {
+    tasks.0.push(tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
@@ -69,18 +81,18 @@ pub async fn run(node: Arc<Node>, port: u16) -> Result<()> {
                 Err(e) => tracing::warn!("lan accept: {e}"),
             }
         }
-    });
+    }));
 
     let sender = udp.clone();
     let b = beacon(&node, port);
-    tokio::spawn(async move {
+    tasks.0.push(tokio::spawn(async move {
         loop {
             for target in broadcast_targets(port) {
                 let _ = sender.send_to(&b, target).await;
             }
             tokio::time::sleep(BEACON_EVERY).await;
         }
-    });
+    }));
 
     let mut buf = [0u8; 64];
     loop {

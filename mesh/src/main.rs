@@ -109,7 +109,9 @@ fn url_part(s: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    use std::io::IsTerminal;
     tracing_subscriber::fmt()
+        .with_ansi(std::io::stdout().is_terminal())
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "elemesh=info".into()))
         .init();
     let cli = Cli::parse();
@@ -133,8 +135,11 @@ async fn main() -> Result<()> {
             if !no_lan {
                 let n = node.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = lan::run(n, lan_port).await {
-                        tracing::error!("lan transport stopped: {e:#}");
+                    loop {
+                        if let Err(e) = lan::run(n.clone(), lan_port).await {
+                            tracing::warn!("lan transport down, retrying in 10 s: {e:#}");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     }
                 });
             }
