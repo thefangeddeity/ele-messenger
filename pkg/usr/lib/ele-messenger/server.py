@@ -131,6 +131,14 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
 
+        # Which node a message was authored on. NULL means "this one" -- the
+        # exporter resolves NULL to its own name on the way out, so a message
+        # authored through any code path (REST or websocket) gets a correct
+        # origin without every write site having to remember to set it.
+        msg_cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        if "origin_node" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN origin_node TEXT")
+
         # Default admin account
         count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         if count == 0:
@@ -274,7 +282,7 @@ async def get_history(token: str = None):
         placeholders = ",".join("?" * len(convo_ids))
         rows = conn.execute(f"""
             SELECT m.conversation_id, m.from_user, m.message, m.image_id, m.timestamp, m.secret,
-                   c.secret as convo_secret
+                   m.origin_node, c.secret as convo_secret
             FROM messages m
             JOIN conversations c ON c.id = m.conversation_id
             WHERE m.conversation_id IN ({placeholders}) AND m.timestamp > ?
@@ -299,7 +307,8 @@ async def get_history(token: str = None):
             "message": r["message"],
             "image_id": r["image_id"],
             "timestamp": r["timestamp"],
-            "secret": bool(r["secret"] or r["convo_secret"])
+            "secret": bool(r["secret"] or r["convo_secret"]),
+            "origin_node": r["origin_node"] or _this_node(),
         })
     return {"history": history}
 
@@ -424,9 +433,9 @@ async def send_message(data: dict, token: str = None):
         else:
             raise HTTPException(400, "need `to` or `conversation_id`")
         conn.execute(
-            "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cid, username, message, image_id, ts, secret))
+            "INSERT INTO messages (conversation_id, from_user, message, image_id, "
+            "timestamp, secret, origin_node) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cid, username, message, image_id, ts, secret, _this_node()))
         conn.commit()
 
     payload = {"from": username, "message": message, "image_id": image_id,
@@ -468,6 +477,10 @@ import hashlib as _hashlib
 FLEET_TOKEN_FILE = "/etc/ele-messenger/fleet.token"
 
 
+def _this_node():
+    return socket.gethostname().split(".")[0]
+
+
 def _fleet_token():
     """Shared secret for peer sync. Absent means sync is OFF, not open."""
     try:
@@ -491,6 +504,62 @@ def message_id(conversation_id, from_user, timestamp, message, image_id):
     return _hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
+# ── THE NODE IS A CHAT USER ─────────────────────────────────────────────
+# A viewer opened on this node is already somebody: this machine. It does not
+# have to be told who it is, and in an outage nobody should be typing a PIN
+# into a wall display to report that the stairs are blocked.
+#
+# So the node holds an account named after itself and hands out a session for
+# it to callers on the local network. Logging in as a PERSON stays available
+# and is strictly an addition -- it says who is writing, which the words can
+# also say. The node identity says which machine is still talking, which the
+# words cannot.
+#
+# Restricted to private address space. That is a real boundary on a household
+# LAN and an honest one to state: anyone already inside the network can speak
+# as this node, exactly as anyone standing in the house could speak into it.
+_PRIVATE_PREFIXES = ("127.", "10.", "192.168.", "169.254.")
+
+
+def _is_local_caller(request):
+    host = (request.client.host if request and request.client else "") or ""
+    if host in ("::1", "localhost"):
+        return True
+    if host.startswith(_PRIVATE_PREFIXES):
+        return True
+    if host.startswith("172."):                      # 172.16.0.0/12 only
+        try:
+            return 16 <= int(host.split(".")[1]) <= 31
+        except Exception:
+            return False
+    if host.startswith("100."):                      # tailnet CGNAT 100.64/10
+        try:
+            return 64 <= int(host.split(".")[1]) <= 127
+        except Exception:
+            return False
+    return False
+
+
+@app.post("/api/node-login")
+async def node_login(request: Request = None):
+    if not _is_local_caller(request):
+        raise HTTPException(403, "node sessions are for the local network only")
+    node = _this_node()
+    with get_db() as conn:
+        row = conn.execute("SELECT username FROM accounts WHERE username = ?",
+                           (node,)).fetchone()
+        if not row:
+            # The PIN is never shown and never typed; it exists because the
+            # accounts table requires one. The node's identity is the node,
+            # not a secret someone has to remember.
+            conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)",
+                         (node, secrets.token_hex(8)))
+            conn.commit()
+    token = secrets.token_hex(16)
+    sessions[token] = node
+    return {"token": token, "username": node, "kind": "node"}
+
+
 @app.get("/api/sync/export")
 async def sync_export(token: str = None, days: int = 30):
     ft = _fleet_token()
@@ -502,8 +571,8 @@ async def sync_export(token: str = None, days: int = 30):
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT conversation_id, from_user, message, image_id, timestamp, secret "
-            "FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
+            "SELECT conversation_id, from_user, message, image_id, timestamp, secret, "
+            "origin_node FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
             (cutoff,)
         ).fetchall()
         members = conn.execute(
@@ -521,6 +590,9 @@ async def sync_export(token: str = None, days: int = 30):
             "image_id": r["image_id"],
             "timestamp": r["timestamp"],
             "secret": bool(r["secret"]),
+            # NULL means it was authored right here, so this node's name is
+            # the correct answer -- which is why no write path needs to set it.
+            "origin_node": r["origin_node"] or _this_node(),
         })
     return {
         "node": socket.gethostname().split(".")[0],
