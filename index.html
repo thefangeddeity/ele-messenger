@@ -1313,17 +1313,16 @@ if (savedToken && saved) {
     .then(r => {
       if (r.ok) { connectChat(saved, savedToken); }
       else {
+        // A STALE token is not a reason to interrogate anyone. Sessions live
+        // in memory here, so every restart of the messenger invalidates every
+        // one of them -- and this branch answered that by putting up a login
+        // form with the last person's name already filled in, which is how
+        // "New tab" kept landing on a PIN prompt.
         localStorage.removeItem('ele-token');
-        document.getElementById('login').style.display = 'flex';
-        document.getElementById('name-input').value = saved;
-        document.getElementById('pin-input').focus();
+        nodeSessionOrLogin();
       }
     })
-    .catch(() => {
-      document.getElementById('login').style.display = 'flex';
-      document.getElementById('name-input').value = saved;
-      document.getElementById('pin-input').focus();
-    });
+    .catch(() => { nodeSessionOrLogin(); });
 } else if (saved) {
   document.getElementById('name-input').value = saved;
   nodeSessionOrLogin();
