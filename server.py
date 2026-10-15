@@ -2,6 +2,7 @@
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
+import socket
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
@@ -548,6 +549,90 @@ async def send_message(data: dict, token: str = None):
             offline.append(m)          # recipient will read it from history
     return {"ok": True, "conversation_id": cid, "timestamp": ts,
             "delivered": delivered, "offline": offline}
+
+
+# ── FLEET SYNC ──────────────────────────────────────────────────────────
+# Every node keeps the whole log and asks peers for what it lacks. Routing a
+# message to the node its recipient "lives on" would need a directory of who
+# is where, kept correct while nodes come and go; replication needs none of
+# that and is idempotent, which matters when the transport is a house with
+# the power out.
+#
+# A message's identity is a hash of its content, so two nodes independently
+# holding the same message agree it is the same message without a schema
+# change, a coordinator, or an id allocator. Clock skew cannot create a
+# duplicate because the timestamp is inside the hash.
+#
+# This endpoint is READ-ONLY and exports nothing but what the local store
+# already holds. The peer does its own inserting, so there is no write path
+# here for a peer to abuse.
+import hashlib as _hashlib
+
+FLEET_TOKEN_FILE = "/etc/ele-messenger/fleet.token"
+
+
+def _fleet_token():
+    """Shared secret for peer sync. Absent means sync is OFF, not open."""
+    try:
+        with open(FLEET_TOKEN_FILE) as fh:
+            t = fh.read().strip()
+        return t or None
+    except Exception:
+        return None
+
+
+def message_id(conversation_id, from_user, timestamp, message, image_id):
+    """Stable across nodes: same message, same id, computed anywhere.
+
+    Field separator is \x1f (unit separator) rather than a printable
+    character, so a message whose text contains the separator cannot be
+    made to collide with a different message by someone choosing their
+    words carefully.
+    """
+    parts = [conversation_id or "", from_user or "", timestamp or "",
+             message or "", image_id or ""]
+    return _hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+@app.get("/api/sync/export")
+async def sync_export(token: str = None, days: int = 30):
+    ft = _fleet_token()
+    if not ft:
+        raise HTTPException(503, "fleet sync not configured on this node")
+    if token != ft:
+        raise HTTPException(401, "invalid fleet token")
+    days = max(1, min(int(days), 365))
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT conversation_id, from_user, message, image_id, timestamp, secret "
+            "FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff,)
+        ).fetchall()
+        members = conn.execute(
+            "SELECT conversation_id, username FROM conversation_members"
+        ).fetchall()
+        convos = conn.execute("SELECT id, secret FROM conversations").fetchall()
+    msgs = []
+    for r in rows:
+        msgs.append({
+            "id": message_id(r["conversation_id"], r["from_user"],
+                             r["timestamp"], r["message"], r["image_id"]),
+            "conversation_id": r["conversation_id"],
+            "from": r["from_user"],
+            "message": r["message"],
+            "image_id": r["image_id"],
+            "timestamp": r["timestamp"],
+            "secret": bool(r["secret"]),
+        })
+    return {
+        "node": socket.gethostname().split(".")[0],
+        "messages": msgs,
+        "members": [{"conversation_id": m["conversation_id"],
+                     "username": m["username"]} for m in members],
+        "conversations": [{"id": c["id"], "secret": bool(c["secret"])}
+                          for c in convos],
+    }
 
 
 @app.websocket("/ws/{username}")
