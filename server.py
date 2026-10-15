@@ -176,6 +176,14 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_user)")
 
+        # Which node a message was authored on. NULL means "this one" -- the
+        # exporter resolves NULL to its own name on the way out, so a message
+        # authored through any code path (REST or websocket) gets a correct
+        # origin without every write site having to remember to set it.
+        msg_cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        if "origin_node" not in msg_cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN origin_node TEXT")
+
         # Default admin account
         count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         if count == 0:
@@ -336,7 +344,7 @@ async def get_history(token: str = None):
         placeholders = ",".join("?" * len(convo_ids))
         rows = conn.execute(f"""
             SELECT m.conversation_id, m.from_user, m.message, m.image_id, m.timestamp, m.secret,
-                   c.secret as convo_secret
+                   m.origin_node, c.secret as convo_secret
             FROM messages m
             JOIN conversations c ON c.id = m.conversation_id
             WHERE m.conversation_id IN ({placeholders}) AND m.timestamp > ?
@@ -361,7 +369,8 @@ async def get_history(token: str = None):
             "message": r["message"],
             "image_id": r["image_id"],
             "timestamp": r["timestamp"],
-            "secret": bool(r["secret"] or r["convo_secret"])
+            "secret": bool(r["secret"] or r["convo_secret"]),
+            "origin_node": r["origin_node"] or _this_node(),
         })
     return {"history": history}
 
@@ -435,6 +444,231 @@ async def get_pubkey(username: str, token: str = None):
     if not row:
         raise HTTPException(404, "pubkey not found")
     return {"pubkey": row["pubkey"]}
+
+# A plain POST alongside the websocket, so a client that only wants to SEND
+# does not have to hold a socket open to do it.
+#
+# This exists because `connected_clients` holds exactly ONE socket per user:
+# a second connection as the same person replaces the first, and closing it
+# deletes the entry outright, so the original client silently stops receiving
+# messages. The camera viewer's message card needed to send one line without
+# evicting the chat app the family actually uses, which a socket cannot do
+# and a request can. Delivery to anyone currently connected is unchanged --
+# this writes the same row and pushes the same payload.
+@app.post("/api/send")
+async def send_message(data: dict, token: str = None):
+    token = token or data.get("token")
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    message = (data.get("message") or "").strip()
+    image_id = data.get("image_id")
+    if not message and not image_id:
+        raise HTTPException(400, "empty message")
+    if len(message) > 4000:
+        raise HTTPException(400, "message too long")
+    secret = 1 if data.get("secret") else 0
+    cid = data.get("conversation_id")
+    target = data.get("to")
+    ts = datetime.now().isoformat()
+
+    with get_db() as conn:
+        if cid:
+            row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                raise HTTPException(404, "conversation not found")
+            member_rows = conn.execute(
+                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+            ).fetchall()
+            members = [m["username"] for m in member_rows]
+            if username not in members:
+                raise HTTPException(403, "not a member")
+        elif target:
+            cid = convo_id(username, target)
+            conn.execute("INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
+                         (cid, secret))
+            for u in (username, target):
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                    (cid, u))
+            members = [username, target]
+        else:
+            raise HTTPException(400, "need `to` or `conversation_id`")
+        conn.execute(
+            "INSERT INTO messages (conversation_id, from_user, message, image_id, "
+            "timestamp, secret, origin_node) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cid, username, message, image_id, ts, secret, _this_node()))
+        conn.commit()
+
+    payload = {"from": username, "message": message, "image_id": image_id,
+               "secret": bool(secret), "conversation_id": cid}
+    delivered, offline = [], []
+    for m in members:
+        if m == username:
+            continue
+        ws = connected_clients.get(m)
+        if ws is not None:
+            try:
+                await ws.send_json(payload)
+                delivered.append(m)
+            except Exception:
+                offline.append(m)      # a dead socket is not a failed send:
+        else:                          # the row is already committed and the
+            offline.append(m)          # recipient will read it from history
+    return {"ok": True, "conversation_id": cid, "timestamp": ts,
+            "delivered": delivered, "offline": offline}
+
+
+# ── FLEET SYNC ──────────────────────────────────────────────────────────
+# Every node keeps the whole log and asks peers for what it lacks. Routing a
+# message to the node its recipient "lives on" would need a directory of who
+# is where, kept correct while nodes come and go; replication needs none of
+# that and is idempotent, which matters when the transport is a house with
+# the power out.
+#
+# A message's identity is a hash of its content, so two nodes independently
+# holding the same message agree it is the same message without a schema
+# change, a coordinator, or an id allocator. Clock skew cannot create a
+# duplicate because the timestamp is inside the hash.
+#
+# This endpoint is READ-ONLY and exports nothing but what the local store
+# already holds. The peer does its own inserting, so there is no write path
+# here for a peer to abuse.
+import hashlib as _hashlib
+
+FLEET_TOKEN_FILE = "/etc/ele-messenger/fleet.token"
+
+
+def _this_node():
+    return socket.gethostname().split(".")[0]
+
+
+def _fleet_token():
+    """Shared secret for peer sync. Absent means sync is OFF, not open."""
+    try:
+        with open(FLEET_TOKEN_FILE) as fh:
+            t = fh.read().strip()
+        return t or None
+    except Exception:
+        return None
+
+
+def message_id(conversation_id, from_user, timestamp, message, image_id):
+    """Stable across nodes: same message, same id, computed anywhere.
+
+    Field separator is \x1f (unit separator) rather than a printable
+    character, so a message whose text contains the separator cannot be
+    made to collide with a different message by someone choosing their
+    words carefully.
+    """
+    parts = [conversation_id or "", from_user or "", timestamp or "",
+             message or "", image_id or ""]
+    return _hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+# ── THE NODE IS A CHAT USER ─────────────────────────────────────────────
+# A viewer opened on this node is already somebody: this machine. It does not
+# have to be told who it is, and in an outage nobody should be typing a PIN
+# into a wall display to report that the stairs are blocked.
+#
+# So the node holds an account named after itself and hands out a session for
+# it to callers on the local network. Logging in as a PERSON stays available
+# and is strictly an addition -- it says who is writing, which the words can
+# also say. The node identity says which machine is still talking, which the
+# words cannot.
+#
+# Restricted to private address space. That is a real boundary on a household
+# LAN and an honest one to state: anyone already inside the network can speak
+# as this node, exactly as anyone standing in the house could speak into it.
+_PRIVATE_PREFIXES = ("127.", "10.", "192.168.", "169.254.")
+
+
+def _is_local_caller(request):
+    host = (request.client.host if request and request.client else "") or ""
+    if host in ("::1", "localhost"):
+        return True
+    if host.startswith(_PRIVATE_PREFIXES):
+        return True
+    if host.startswith("172."):                      # 172.16.0.0/12 only
+        try:
+            return 16 <= int(host.split(".")[1]) <= 31
+        except Exception:
+            return False
+    if host.startswith("100."):                      # tailnet CGNAT 100.64/10
+        try:
+            return 64 <= int(host.split(".")[1]) <= 127
+        except Exception:
+            return False
+    return False
+
+
+@app.post("/api/node-login")
+async def node_login(request: Request = None):
+    if not _is_local_caller(request):
+        raise HTTPException(403, "node sessions are for the local network only")
+    node = _this_node()
+    with get_db() as conn:
+        row = conn.execute("SELECT username FROM accounts WHERE username = ?",
+                           (node,)).fetchone()
+        if not row:
+            # The PIN is never shown and never typed; it exists because the
+            # accounts table requires one. The node's identity is the node,
+            # not a secret someone has to remember.
+            # hash_pin, not the raw value. Nobody ever types this PIN -- the
+            # node's identity is the node, and the column simply has to hold
+            # something -- but a plaintext secret here would sit in the table
+            # forever: the legacy-plaintext path only rehashes on a LOGIN,
+            # and no one ever logs in as a machine.
+            conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)",
+                         (node, hash_pin(secrets.token_hex(16))))
+            conn.commit()
+    token = secrets.token_hex(16)
+    sessions[token] = node
+    return {"token": token, "username": node, "kind": "node"}
+
+
+@app.get("/api/sync/export")
+async def sync_export(token: str = None, days: int = 30):
+    ft = _fleet_token()
+    if not ft:
+        raise HTTPException(503, "fleet sync not configured on this node")
+    if token != ft:
+        raise HTTPException(401, "invalid fleet token")
+    days = max(1, min(int(days), 365))
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT conversation_id, from_user, message, image_id, timestamp, secret, "
+            "origin_node FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff,)
+        ).fetchall()
+        members = conn.execute(
+            "SELECT conversation_id, username FROM conversation_members"
+        ).fetchall()
+        convos = conn.execute("SELECT id, secret FROM conversations").fetchall()
+    msgs = []
+    for r in rows:
+        msgs.append({
+            "id": message_id(r["conversation_id"], r["from_user"],
+                             r["timestamp"], r["message"], r["image_id"]),
+            "conversation_id": r["conversation_id"],
+            "from": r["from_user"],
+            "message": r["message"],
+            "image_id": r["image_id"],
+            "timestamp": r["timestamp"],
+            "secret": bool(r["secret"]),
+            # NULL means it was authored right here, so this node's name is
+            # the correct answer -- which is why no write path needs to set it.
+            "origin_node": r["origin_node"] or _this_node(),
+        })
+    return {
+        "node": socket.gethostname().split(".")[0],
+        "messages": msgs,
+        "members": [{"conversation_id": m["conversation_id"],
+                     "username": m["username"]} for m in members],
+        "conversations": [{"id": c["id"], "secret": bool(c["secret"])}
+                          for c in convos],
+    }
 
 @app.get("/api/conversations")
 async def get_conversations(token: str = None):
@@ -532,164 +766,6 @@ async def add_member(cid: str, data: dict, token: str = None):
         if m in connected_clients:
             await connected_clients[m].send_json(notify)
     return {"status": "ok", "members": member_list}
-
-# A plain POST alongside the websocket, so a client that only wants to SEND
-# does not have to hold a socket open to do it.
-#
-# This exists because `connected_clients` holds exactly ONE socket per user:
-# a second connection as the same person replaces the first, and closing it
-# deletes the entry outright, so the original client silently stops receiving
-# messages. The camera viewer's message card needed to send one line without
-# evicting the chat app the family actually uses, which a socket cannot do
-# and a request can. Delivery to anyone currently connected is unchanged --
-# this writes the same row and pushes the same payload.
-@app.post("/api/send")
-async def send_message(data: dict, token: str = None):
-    token = token or data.get("token")
-    if not token or token not in sessions:
-        raise HTTPException(401, "invalid token")
-    username = sessions[token]
-    message = (data.get("message") or "").strip()
-    image_id = data.get("image_id")
-    if not message and not image_id:
-        raise HTTPException(400, "empty message")
-    if len(message) > 4000:
-        raise HTTPException(400, "message too long")
-    secret = 1 if data.get("secret") else 0
-    cid = data.get("conversation_id")
-    target = data.get("to")
-    ts = datetime.now().isoformat()
-
-    with get_db() as conn:
-        if cid:
-            row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
-            if not row:
-                raise HTTPException(404, "conversation not found")
-            member_rows = conn.execute(
-                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
-            ).fetchall()
-            members = [m["username"] for m in member_rows]
-            if username not in members:
-                raise HTTPException(403, "not a member")
-        elif target:
-            cid = convo_id(username, target)
-            conn.execute("INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
-                         (cid, secret))
-            for u in (username, target):
-                conn.execute(
-                    "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
-                    (cid, u))
-            members = [username, target]
-        else:
-            raise HTTPException(400, "need `to` or `conversation_id`")
-        conn.execute(
-            "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cid, username, message, image_id, ts, secret))
-        conn.commit()
-
-    payload = {"from": username, "message": message, "image_id": image_id,
-               "secret": bool(secret), "conversation_id": cid}
-    delivered, offline = [], []
-    for m in members:
-        if m == username:
-            continue
-        ws = connected_clients.get(m)
-        if ws is not None:
-            try:
-                await ws.send_json(payload)
-                delivered.append(m)
-            except Exception:
-                offline.append(m)      # a dead socket is not a failed send:
-        else:                          # the row is already committed and the
-            offline.append(m)          # recipient will read it from history
-    return {"ok": True, "conversation_id": cid, "timestamp": ts,
-            "delivered": delivered, "offline": offline}
-
-
-# ── FLEET SYNC ──────────────────────────────────────────────────────────
-# Every node keeps the whole log and asks peers for what it lacks. Routing a
-# message to the node its recipient "lives on" would need a directory of who
-# is where, kept correct while nodes come and go; replication needs none of
-# that and is idempotent, which matters when the transport is a house with
-# the power out.
-#
-# A message's identity is a hash of its content, so two nodes independently
-# holding the same message agree it is the same message without a schema
-# change, a coordinator, or an id allocator. Clock skew cannot create a
-# duplicate because the timestamp is inside the hash.
-#
-# This endpoint is READ-ONLY and exports nothing but what the local store
-# already holds. The peer does its own inserting, so there is no write path
-# here for a peer to abuse.
-import hashlib as _hashlib
-
-FLEET_TOKEN_FILE = "/etc/ele-messenger/fleet.token"
-
-
-def _fleet_token():
-    """Shared secret for peer sync. Absent means sync is OFF, not open."""
-    try:
-        with open(FLEET_TOKEN_FILE) as fh:
-            t = fh.read().strip()
-        return t or None
-    except Exception:
-        return None
-
-
-def message_id(conversation_id, from_user, timestamp, message, image_id):
-    """Stable across nodes: same message, same id, computed anywhere.
-
-    Field separator is \x1f (unit separator) rather than a printable
-    character, so a message whose text contains the separator cannot be
-    made to collide with a different message by someone choosing their
-    words carefully.
-    """
-    parts = [conversation_id or "", from_user or "", timestamp or "",
-             message or "", image_id or ""]
-    return _hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
-
-
-@app.get("/api/sync/export")
-async def sync_export(token: str = None, days: int = 30):
-    ft = _fleet_token()
-    if not ft:
-        raise HTTPException(503, "fleet sync not configured on this node")
-    if token != ft:
-        raise HTTPException(401, "invalid fleet token")
-    days = max(1, min(int(days), 365))
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT conversation_id, from_user, message, image_id, timestamp, secret "
-            "FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
-            (cutoff,)
-        ).fetchall()
-        members = conn.execute(
-            "SELECT conversation_id, username FROM conversation_members"
-        ).fetchall()
-        convos = conn.execute("SELECT id, secret FROM conversations").fetchall()
-    msgs = []
-    for r in rows:
-        msgs.append({
-            "id": message_id(r["conversation_id"], r["from_user"],
-                             r["timestamp"], r["message"], r["image_id"]),
-            "conversation_id": r["conversation_id"],
-            "from": r["from_user"],
-            "message": r["message"],
-            "image_id": r["image_id"],
-            "timestamp": r["timestamp"],
-            "secret": bool(r["secret"]),
-        })
-    return {
-        "node": socket.gethostname().split(".")[0],
-        "messages": msgs,
-        "members": [{"conversation_id": m["conversation_id"],
-                     "username": m["username"]} for m in members],
-        "conversations": [{"id": c["id"], "secret": bool(c["secret"])}
-                          for c in convos],
-    }
-
 
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
