@@ -1,0 +1,16 @@
+# systemd user unit: starts the mesh daemon at login and keeps it running.
+#   install -Dm644 elemesh.service ~/.config/systemd/user/elemesh.service
+#   systemctl --user enable --now elemesh
+# Run `elemesh init --passphrase …` once first. To have it start before
+# anyone logs in: loginctl enable-linger $USER
+[Unit]
+Description=ELE Messenger mesh daemon
+After=bluetooth.target network.target
+
+[Service]
+ExecStart=%h/.local/bin/elemesh run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

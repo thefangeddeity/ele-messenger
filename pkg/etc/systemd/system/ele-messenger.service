@@ -6,7 +6,13 @@ After=network.target tailscaled.service
 Type=simple
 User=ele-messenger
 WorkingDirectory=/usr/lib/ele-messenger
-ExecStart=/usr/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+# 127.0.0.1, not 0.0.0.0. The nginx snippet this package installs proxies
+# to 127.0.0.1:8000, and the Flutter client talks to nginx too (it builds
+# https://<host>/ele-api and wss://<host>/ele-ws). Binding every interface
+# published an unauthenticated HTTP API straight onto the LAN and tailnet,
+# bypassing the TLS front door the package sets up. Set ELE_HOST in a
+# systemd override if a split host genuinely needs it.
+ExecStart=/usr/bin/uvicorn server:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 

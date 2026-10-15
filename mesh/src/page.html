@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ELE Mesh</title>
+<style>
+  :root { --bg:#0f2a58; --panel:#162e58; --bar:#4a7ab8; --text:#ddeeff; --muted:#8aa4c4; --me:#2a4a7a; --ok:#5dc200; --warn:#e0a030; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; height:100vh; }
+  header { background:var(--bar); padding:8px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header b { font-size:16px; }
+  #links { font-size:13px; }
+  #links.none { color:#ffd9a0; }
+  input { background:#0a2050; color:var(--text); border:1px solid #2a4a7a; border-radius:4px; padding:6px 8px; font:inherit; }
+  #log { flex:1; overflow-y:auto; padding:12px 16px; }
+  .m { margin:4px 0; max-width:720px; padding:6px 10px; border-radius:6px; background:var(--panel); }
+  .m.me { background:var(--me); margin-left:auto; }
+  .m .who { font-size:12px; color:var(--muted); }
+  form { display:flex; gap:8px; padding:8px 16px 16px; }
+  #text { flex:1; }
+  button { background:var(--bar); color:#fff; border:0; border-radius:4px; padding:6px 14px; font:inherit; cursor:pointer; }
+</style>
+</head>
+<body>
+<header>
+  <b>ELE Mesh</b>
+  <label>Room <input id="room" size="10" value="home"></label>
+  <label>Name <input id="nick" size="10"></label>
+  <span id="links">…</span>
+</header>
+<div id="log" aria-live="polite"></div>
+<form id="f">
+  <input id="text" autocomplete="off" placeholder="Message" maxlength="2048">
+  <button>Send</button>
+</form>
+<script>
+const $ = id => document.getElementById(id);
+const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                set(k,v){ try { localStorage.setItem(k,v); } catch {} } };
+$("nick").value = store.get("nick");
+$("room").value = store.get("room") || "home";
+let me = "", cursor = 0, gen = 0;
+let msgs = [];
+
+function render() {
+  const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.replaceChildren(...msgs.map(m => {
+    const d = document.createElement("div");
+    d.className = "m" + (m.author === me ? " me" : "");
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = (m.nick || m.author.slice(0, 6)) + " · " + new Date(m.ts_ms).toLocaleTimeString();
+    const t = document.createElement("div");
+    t.textContent = m.text;
+    d.append(who, t);
+    return d;
+  }));
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function poll(g) {
+  const room = encodeURIComponent($("room").value.trim() || "home");
+  while (g === gen) {
+    try {
+      const r = await fetch(`/v1/rooms/${room}/messages?after=${cursor}&wait=25`);
+      const j = await r.json();
+      if (g !== gen) return;
+      if (j.messages.length) {
+        msgs.push(...j.messages);
+        msgs.sort((a, b) => a.ts_ms - b.ts_ms || a.author.localeCompare(b.author) || a.seq - b.seq);
+        cursor = j.cursor;
+        render();
+      }
+    } catch { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+
+function switchRoom() {
+  store.set("room", $("room").value.trim());
+  gen++; cursor = 0; msgs = []; render(); poll(gen);
+}
+
+async function status() {
+  try {
+    const s = await (await fetch("/v1/status")).json();
+    me = s.node;
+    const el = $("links");
+    el.className = s.links.length ? "" : "none";
+    el.textContent = s.links.length
+      ? s.links.map(l => `${l.peer.slice(0, 6)} via ${l.transport}`).join(", ")
+      : "no peers in range — messages wait here until one appears";
+  } catch { $("links").textContent = "daemon not responding"; }
+}
+
+$("room").addEventListener("change", switchRoom);
+$("nick").addEventListener("change", () => store.set("nick", $("nick").value.trim()));
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = $("text").value;
+  if (!text.trim()) return;
+  const room = encodeURIComponent($("room").value.trim() || "home");
+  const r = await fetch(`/v1/rooms/${room}/messages`, { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nick: $("nick").value.trim(), text }) });
+  if (r.ok) $("text").value = "";
+});
+
+status(); setInterval(status, 3000); switchRoom();
+</script>
+</body>
+</html>

@@ -3,5 +3,5 @@
   "port": 8000,
   "server_name": "ELE Messenger",
   "tailscale_ip": "100.64.0.1",
-  "lan_ip": "<lan-ip>"
+  "lan_ip": "192.168.0.2"
 }
