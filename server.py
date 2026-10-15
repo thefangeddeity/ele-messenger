@@ -3,7 +3,7 @@ import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
 import socket
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 import bcrypt
 import time
@@ -208,7 +208,7 @@ async def startup_event():
 async def cleanup_messages():
     while True:
         await asyncio.sleep(3600)
-        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         with get_db() as conn:
             conn.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff,))
             conn.commit()
@@ -331,7 +331,7 @@ async def get_history(token: str = None):
     if not token or token not in sessions:
         raise HTTPException(401, "invalid token")
     username = sessions[token]
-    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     with get_db() as conn:
         # Get all conversation IDs this user is a member of
         convo_rows = conn.execute(
@@ -455,6 +455,29 @@ async def get_pubkey(username: str, token: str = None):
 # evicting the chat app the family actually uses, which a socket cannot do
 # and a request can. Delivery to anyone currently connected is unchanged --
 # this writes the same row and pushes the same payload.
+# ── THE HOUSE CHANNEL ───────────────────────────────────────────────────
+# One rolling conversation everyone is in, rather than a grid of pairs.
+#
+# Person-to-person threads assume you know who to tell. In the event this is
+# built for, you do not: you have something to say about the house and it
+# should reach whoever is listening. Picking a recipient from a dropdown is a
+# decision nobody should have to make while reporting that the stairs are
+# blocked.
+#
+# Membership is implicit. Anyone who can authenticate against this node can
+# speak into the channel and is added on first use, so there is no invite
+# step and no way to be left out of the one conversation that matters.
+HOUSE = "house"
+
+
+def _join_house(conn, username):
+    conn.execute("INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, 0)",
+                 (HOUSE,))
+    conn.execute(
+        "INSERT OR IGNORE INTO conversation_members (conversation_id, username) "
+        "VALUES (?, ?)", (HOUSE, username))
+
+
 @app.post("/api/send")
 async def send_message(data: dict, token: str = None):
     token = token or data.get("token")
@@ -470,10 +493,12 @@ async def send_message(data: dict, token: str = None):
     secret = 1 if data.get("secret") else 0
     cid = data.get("conversation_id")
     target = data.get("to")
-    ts = datetime.now().isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
 
     with get_db() as conn:
         if cid:
+            if cid == HOUSE:
+                _join_house(conn, username)
             row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
             if not row:
                 raise HTTPException(404, "conversation not found")
@@ -481,7 +506,11 @@ async def send_message(data: dict, token: str = None):
                 "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
             ).fetchall()
             members = [m["username"] for m in member_rows]
-            if username not in members:
+            if cid == HOUSE and username not in members:
+                # Open channel: speaking into it is how you join it.
+                _join_house(conn, username)
+                members = members + [username]
+            elif username not in members:
                 raise HTTPException(403, "not a member")
         elif target:
             cid = convo_id(username, target)
@@ -635,7 +664,7 @@ async def sync_export(token: str = None, days: int = 30):
     if token != ft:
         raise HTTPException(401, "invalid fleet token")
     days = max(1, min(int(days), 365))
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with get_db() as conn:
         rows = conn.execute(
             "SELECT conversation_id, from_user, message, image_id, timestamp, secret, "
@@ -775,7 +804,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         return
     await websocket.accept()
     connected_clients[username] = websocket
-    connect_log.append({"time": datetime.now().isoformat(), "event": f"{username} connected"})
+    connect_log.append({"time": datetime.now(timezone.utc).isoformat(), "event": f"{username} connected"})
     try:
         while True:
             data = await websocket.receive_json()
@@ -789,7 +818,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             secret = 1 if data.get("secret") else 0
             if cid_direct and (message or image_id):
                 # Group (or explicit cid) message — fan out to all members
-                ts = datetime.now().isoformat()
+                ts = datetime.now(timezone.utc).isoformat()
                 with get_db() as conn:
                     row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid_direct,)).fetchone()
                     if not row:
@@ -818,7 +847,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             elif target and (message or image_id):
                 # 1:1 message — legacy path
                 cid = convo_id(username, target, secret=bool(secret))
-                ts = datetime.now().isoformat()
+                ts = datetime.now(timezone.utc).isoformat()
                 with get_db() as conn:
                     conn.execute(
                         "INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
@@ -849,4 +878,4 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     await websocket.send_json({"from": "server", "message": f"{target} is not online."})
     except WebSocketDisconnect:
         del connected_clients[username]
-        connect_log.append({"time": datetime.now().isoformat(), "event": f"{username} disconnected"})
+        connect_log.append({"time": datetime.now(timezone.utc).isoformat(), "event": f"{username} disconnected"})
