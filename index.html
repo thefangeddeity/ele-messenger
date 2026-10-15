@@ -547,17 +547,29 @@ function connectChat(username, tok) {
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   document.getElementById('statusbar-text').textContent = 'Connecting...';
-  const SERVER = location.hostname;
+  // location.host, NOT hostname: hostname omits the port, so a client served
+  // on :8080 tried to open its socket on :80 and silently never connected.
+  // The symptom is a blank page, because the UI is only revealed in onopen.
+  const SERVER = location.host;
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + SERVER + '/ele-ws/' + encodeURIComponent(me) + '?token=' + token);
   connectTimer = setTimeout(() => { if (ws && ws.readyState !== WebSocket.OPEN) ws.close(); }, 10000);
   ws.onopen = async () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     retryDelay = 3000;
-    // Load or generate keypair
-    let kp = await loadKeyPair(me, myPin);
-    if (!kp) {
+    // Load or generate keypair.
+    //
+    // Wrapped, because a node session has NO PIN -- nobody typed one -- and
+    // this derivation is keyed on it. An exception here used to reject the
+    // whole handler, so the socket was open while the UI below never ran and
+    // the page stayed blank. End-to-end "secret" conversations need a PIN and
+    // are unavailable to a node session; plain messages do not and must not
+    // be held hostage to them.
+    let kp = null;
+    try {
+    kp = await loadKeyPair(me, myPin);
+    if (!kp && myPin) {
       kp = await generateAndRegisterKeys(me, myPin);
-    } else {
+    } else if (kp) {
       // Re-register pubkey in case server was reset
       try {
         const pubSpki = await crypto.subtle.exportKey('spki', kp.publicKey);
@@ -566,6 +578,9 @@ function connectChat(username, tok) {
           body: JSON.stringify({pubkey: bufToB64(pubSpki)})
         });
       } catch {}
+    }
+    } catch (e) {
+      console.warn('key setup skipped:', e);
     }
     myKeyPair = kp;
     keepalive = setInterval(() => {
@@ -1336,7 +1351,10 @@ function nodeSessionOrLogin() {
     .catch(() => null)
     .then(j => {
       if (j && j.token) {
-        document.getElementById('login').style.display = 'none';
+        // Deliberately does NOT hide the login here. connectChat reveals the
+        // UI in ws.onopen, which is the only moment the chat is actually
+        // usable; hiding it up front meant a failed connection left a blank
+        // page instead of the form you could have used.
         connectChat(j.username, j.token);
       } else {
         document.getElementById('login').style.display = 'flex';
