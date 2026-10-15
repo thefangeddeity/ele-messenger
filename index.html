@@ -1311,9 +1311,38 @@ if (savedToken && saved) {
     });
 } else if (saved) {
   document.getElementById('name-input').value = saved;
-  document.getElementById('pin-input').focus();
+  nodeSessionOrLogin();
 } else {
-  document.getElementById('name-input').focus();
+  nodeSessionOrLogin();
+}
+
+// A browser opened on this machine is already somebody: this machine. The
+// card in the camera viewer has worked that way since node sessions landed,
+// and a door that demands credentials the room behind it did not is a broken
+// affordance -- you could read and send from the card, then hit a PIN prompt
+// by clicking "New tab".
+//
+// So the client starts as the node. Signing in as a person stays exactly
+// where it was and remains a feature: it says WHO is writing, which the words
+// can also say, while the node identity says WHICH MACHINE is still talking,
+// which the words cannot.
+//
+// If the node session is refused -- it is restricted to callers on the local
+// network -- the login screen appears as before. Falling back to asking is
+// correct; failing silently into an empty chat is not.
+function nodeSessionOrLogin() {
+  fetch('/ele-api/api/node-login', { method: 'POST', cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then(j => {
+      if (j && j.token) {
+        document.getElementById('login').style.display = 'none';
+        connectChat(j.username, j.token);
+      } else {
+        document.getElementById('login').style.display = 'flex';
+        document.getElementById('name-input').focus();
+      }
+    });
 }
 updateTransportUI();
 
