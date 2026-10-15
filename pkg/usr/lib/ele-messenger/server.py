@@ -373,6 +373,80 @@ async def get_pubkey(username: str, token: str = None):
         raise HTTPException(404, "pubkey not found")
     return {"pubkey": row["pubkey"]}
 
+# A plain POST alongside the websocket, so a client that only wants to SEND
+# does not have to hold a socket open to do it.
+#
+# This exists because `connected_clients` holds exactly ONE socket per user:
+# a second connection as the same person replaces the first, and closing it
+# deletes the entry outright, so the original client silently stops receiving
+# messages. The camera viewer's message card needed to send one line without
+# evicting the chat app the family actually uses, which a socket cannot do
+# and a request can. Delivery to anyone currently connected is unchanged --
+# this writes the same row and pushes the same payload.
+@app.post("/api/send")
+async def send_message(data: dict, token: str = None):
+    token = token or data.get("token")
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
+    username = sessions[token]
+    message = (data.get("message") or "").strip()
+    image_id = data.get("image_id")
+    if not message and not image_id:
+        raise HTTPException(400, "empty message")
+    if len(message) > 4000:
+        raise HTTPException(400, "message too long")
+    secret = 1 if data.get("secret") else 0
+    cid = data.get("conversation_id")
+    target = data.get("to")
+    ts = datetime.now().isoformat()
+
+    with get_db() as conn:
+        if cid:
+            row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                raise HTTPException(404, "conversation not found")
+            member_rows = conn.execute(
+                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+            ).fetchall()
+            members = [m["username"] for m in member_rows]
+            if username not in members:
+                raise HTTPException(403, "not a member")
+        elif target:
+            cid = convo_id(username, target)
+            conn.execute("INSERT OR IGNORE INTO conversations (id, secret) VALUES (?, ?)",
+                         (cid, secret))
+            for u in (username, target):
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversation_members (conversation_id, username) VALUES (?, ?)",
+                    (cid, u))
+            members = [username, target]
+        else:
+            raise HTTPException(400, "need `to` or `conversation_id`")
+        conn.execute(
+            "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cid, username, message, image_id, ts, secret))
+        conn.commit()
+
+    payload = {"from": username, "message": message, "image_id": image_id,
+               "secret": bool(secret), "conversation_id": cid}
+    delivered, offline = [], []
+    for m in members:
+        if m == username:
+            continue
+        ws = connected_clients.get(m)
+        if ws is not None:
+            try:
+                await ws.send_json(payload)
+                delivered.append(m)
+            except Exception:
+                offline.append(m)      # a dead socket is not a failed send:
+        else:                          # the row is already committed and the
+            offline.append(m)          # recipient will read it from history
+    return {"ok": True, "conversation_id": cid, "timestamp": ts,
+            "delivered": delivered, "offline": offline}
+
+
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     token = websocket.query_params.get("token")
