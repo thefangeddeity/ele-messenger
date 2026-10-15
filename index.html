@@ -791,7 +791,18 @@ function setActiveContact(u) {
   document.getElementById('msg-input').focus();
 }
 
-function normDate(ts) { return new Date(typeof ts === "string" && !ts.endsWith("Z") ? ts + "Z" : ts); }
+// Append Z only when the string carries NO zone at all.
+//
+// This used to test endsWith("Z"), which was right while the server emitted
+// naive timestamps and the client had to assume they were UTC. The server now
+// emits an explicit offset, so that test appended Z to "...+00:00" and every
+// message loaded from history rendered "Invalid Date" -- while live ones over
+// the websocket looked fine, because those carry no timestamp and the client
+// stamps them with its own clock.
+function normDate(ts) {
+  if (typeof ts !== "string") return new Date(ts);
+  return new Date(/([zZ]|[+-]\d{2}:?\d{2})$/.test(ts) ? ts : ts + "Z");
+}
 function fmtTime(d) {
   const now = new Date();
   if ((now - d) < 86400000 && now.getDate() === d.getDate())
@@ -805,7 +816,7 @@ function updateSidebar() {
   const mcontacts = document.getElementById('mobile-contacts');
   const allContacts = new Set([...Object.keys(threads), ...Array.from(onlineUsers).filter(u => u !== me)]);
   const sorted = Array.from(allContacts).sort((a, b) => {
-    const normTs = ts => ts ? new Date(ts.endsWith("Z") ? ts : ts + "Z") : new Date(0);
+    const normTs = ts => ts ? normDate(ts) : new Date(0);
     const at = threads[a] ? normTs(threads[a][threads[a].length-1].ts) : new Date(0);
     const bt = threads[b] ? normTs(threads[b][threads[b].length-1].ts) : new Date(0);
     return bt - at;
