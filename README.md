@@ -1,6 +1,17 @@
 # ele-messenger
 
+> **ELEMESH** — **E**xtinction **L**evel **E**vent **M**essenger,
+> **E**mergency **S**tore-and-**H**old
+
 A household messenger that keeps working when the infrastructure does not.
+
+The second half of the name is the mechanism, not a slogan. Every node keeps
+the whole log and **holds** it; when a peer comes within reach it hands over
+whatever that peer is missing. Nothing is addressed at a server, nothing
+expires because a recipient was asleep, and a node switched off for a week
+catches up by being switched on near another one.
+
+`elemesh` is also, literally, the name of the daemon that does it.
 
 It is built for the case where the internet is gone and possibly the router
 with it: a small server on a machine in the house, a browser client, and
@@ -75,6 +86,10 @@ A message's identity is a hash of its own content, so two nodes that
 independently hold the same message agree on that with no coordinator and no
 id allocator. Sync is **pull-only**: a node decides what enters its own store,
 and nothing a peer says can make it delete or overwrite anything.
+
+Measured, between two laptops with the internet and the tailnet both cut:
+**6 seconds** over the LAN path, and **32 milliseconds** over the mesh daemon,
+which pushes over a held link instead of polling.
 
 ## API
 
