@@ -28,6 +28,28 @@ struct LinkInfo {
     tx: mpsc::Sender<Vec<u8>>,
 }
 
+/// An ELE node heard on some transport, linked or not. Beacons and BLE
+/// advertisements carry no secret, so a node without the passphrase sees
+/// these too.
+#[derive(Serialize)]
+pub struct NearbyStatus {
+    /// Node id when the transport names it; a Mac's BLE advertisement doesn't.
+    pub peer: Option<String>,
+    pub transport: &'static str,
+    pub via: String,
+    pub seen_s: u64,
+}
+
+struct Heard {
+    peer: Option<NodeId>,
+    transport: &'static str,
+    via: String,
+    at: Instant,
+}
+
+/// How long a node stays "nearby" after we last heard it.
+pub const NEARBY_FOR: Duration = Duration::from_secs(90);
+
 #[derive(Serialize)]
 pub struct LinkStatus {
     pub peer: String,
@@ -47,6 +69,9 @@ pub struct Node {
     next_link: AtomicU64,
     dials: Mutex<HashMap<(NodeId, &'static str), Dial>>,
     pub changed: Notify,
+    /// Without the passphrase: listen and report who is around, never link.
+    pub scout: bool,
+    nearby: Mutex<HashMap<String, Heard>>,
 }
 
 enum Dial {
@@ -66,11 +91,45 @@ impl Node {
             next_link: AtomicU64::new(1),
             dials: Mutex::new(HashMap::new()),
             changed: Notify::new(),
+            scout: false,
+            nearby: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// A node that has no passphrase: its links could never handshake.
+    pub fn scout(identity: Identity, store: Store) -> Self {
+        Self { scout: true, ..Self::new(identity, [0; 32], store) }
+    }
+
+    pub fn heard(&self, peer: Option<NodeId>, transport: &'static str, via: String) {
+        if peer == Some(self.identity.id) {
+            return;
+        }
+        let key = match peer {
+            Some(p) => format!("{}/{transport}", hex::encode(p)),
+            None => format!("{via}/{transport}"),
+        };
+        self.nearby.lock().unwrap().insert(key, Heard { peer, transport, via, at: Instant::now() });
+    }
+
+    pub fn nearby(&self) -> Vec<NearbyStatus> {
+        let mut n = self.nearby.lock().unwrap();
+        n.retain(|_, h| h.at.elapsed() < NEARBY_FOR);
+        n.values()
+            .map(|h| NearbyStatus {
+                peer: h.peer.map(hex::encode),
+                transport: h.transport,
+                via: h.via.clone(),
+                seen_s: h.at.elapsed().as_secs(),
+            })
+            .collect()
     }
 
     /// False while a dial to this peer is running or recently failed.
     pub fn try_begin_dial(&self, peer: NodeId, transport: &'static str) -> bool {
+        if self.scout {
+            return false;
+        }
         let mut d = self.dials.lock().unwrap();
         match d.get(&(peer, transport)) {
             Some(Dial::InProgress) => false,

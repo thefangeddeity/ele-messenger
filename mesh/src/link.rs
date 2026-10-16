@@ -267,4 +267,23 @@ mod tests {
         assert_eq!(count(&b), 0);
         assert!(a.links().is_empty() && b.links().is_empty());
     }
+
+    #[tokio::test]
+    async fn a_scout_sees_nodes_but_never_links() {
+        let a = node("our household");
+        a.post("home", "a", "private", None).unwrap();
+        let s = Arc::new(Node::scout(Identity::generate().unwrap(), Store::in_memory().unwrap()));
+        s.heard(Some(a.identity.id), "lan", "10.0.0.2".into());
+        s.heard(None, "ble", "AA:BB".into());
+        s.heard(Some(s.identity.id), "lan", "self".into());
+        assert_eq!(s.nearby().len(), 2, "itself is not nearby");
+        assert!(!s.try_begin_dial(a.identity.id, "lan"));
+        // Even if someone dials it, the handshake can't pass without the passphrase.
+        let (sa, sb) = tokio::io::duplex(4096);
+        let ra = tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
+        let rs = tokio::spawn(run(sb, false, "test", "pipe".into(), s.clone()));
+        let (ra, rs) = (ra.await.unwrap(), rs.await.unwrap());
+        assert!(ra.is_err() || rs.is_err());
+        assert_eq!(count(&s), 0);
+    }
 }

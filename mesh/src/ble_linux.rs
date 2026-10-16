@@ -122,7 +122,7 @@ async fn rendezvous(node: Arc<Node>, adapter: Adapter) -> Result<()> {
     let mut adv = None;
     let mut stale = HashMap::new();
     loop {
-        if adv.is_none() {
+        if adv.is_none() && !node.scout {
             let a = Advertisement {
                 service_uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
                 discoverable: Some(true),
@@ -235,6 +235,7 @@ async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId,
             }
             let name = device.name().await.ok().flatten();
             let peer = name.as_deref().and_then(ble::peer_from_name);
+            node.heard(peer, "ble", addr.to_string());
             if !ble::should_dial(&node.identity.id, peer) {
                 continue;
             }

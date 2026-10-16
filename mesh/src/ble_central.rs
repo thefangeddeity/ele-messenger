@@ -44,6 +44,7 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
             continue;
         }
         let peer = props.local_name.as_deref().and_then(ble::peer_from_name);
+        node.heard(peer, "ble", format!("{id:?}"));
         if peer == Some(node.identity.id) || peer.is_some_and(|x| node.is_linked(&x, "ble")) {
             continue;
         }

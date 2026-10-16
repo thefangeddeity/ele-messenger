@@ -78,7 +78,14 @@ async fn rooms(State(node): State<Arc<Node>>) -> Response {
 
 async fn status(State(node): State<Arc<Node>>) -> Response {
     let entries = node.with_store(|s| s.count()).unwrap_or(0);
-    Json(json!({ "node": node.id_hex(), "entries": entries, "links": node.links() })).into_response()
+    Json(json!({
+        "node": node.id_hex(),
+        "joined": !node.scout,
+        "entries": entries,
+        "links": node.links(),
+        "nearby": node.nearby(),
+    }))
+    .into_response()
 }
 
 /// Only answer requests addressed to localhost, so a web page cannot reach the

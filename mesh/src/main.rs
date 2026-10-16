@@ -33,6 +33,9 @@ enum Cmd {
         no_lan: bool,
         #[arg(long)]
         no_ble: bool,
+        /// Listen only and report nearby nodes; needs no passphrase
+        #[arg(long)]
+        scout: bool,
     },
     /// Post a message through the local daemon
     Send {
@@ -89,7 +92,7 @@ async fn main() -> Result<()> {
             let id = daemon::init(&dir, &passphrase)?;
             println!("node {} ready in {}", hex::encode(id), dir.display());
         }
-        Cmd::Run { lan_port, no_lan, no_ble } => {
+        Cmd::Run { lan_port, no_lan, no_ble, scout } => {
             let opts = daemon::Options {
                 state_dir: daemon::state_dir(cli.state_dir)?,
                 api: cli.api,
@@ -97,7 +100,7 @@ async fn main() -> Result<()> {
                 lan: !no_lan,
                 ble: !no_ble,
             };
-            daemon::run(opts).await?;
+            if scout { daemon::scout(opts).await? } else { daemon::run(opts).await? }
         }
         Cmd::Send { room, text, nick } => {
             let body = serde_json::json!({ "nick": nick, "text": text }).to_string();

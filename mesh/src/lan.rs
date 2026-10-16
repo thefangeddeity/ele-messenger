@@ -83,21 +83,25 @@ pub async fn run(node: Arc<Node>, port: u16) -> Result<()> {
         }
     }));
 
-    let sender = udp.clone();
-    let b = beacon(&node, port);
-    tasks.0.push(tokio::spawn(async move {
-        loop {
-            for target in broadcast_targets(port) {
-                let _ = sender.send_to(&b, target).await;
+    // A scout only listens: announcing itself would invite dials it can't answer.
+    if !node.scout {
+        let sender = udp.clone();
+        let b = beacon(&node, port);
+        tasks.0.push(tokio::spawn(async move {
+            loop {
+                for target in broadcast_targets(port) {
+                    let _ = sender.send_to(&b, target).await;
+                }
+                tokio::time::sleep(BEACON_EVERY).await;
             }
-            tokio::time::sleep(BEACON_EVERY).await;
-        }
-    }));
+        }));
+    }
 
     let mut buf = [0u8; 64];
     loop {
         let (len, from) = udp.recv_from(&mut buf).await?;
         let Some((peer, peer_port)) = parse_beacon(&buf[..len]) else { continue };
+        node.heard(Some(peer), "lan", from.ip().to_string());
         // The lower id dials so two nodes don't race to connect to each other.
         if peer == node.identity.id || node.identity.id > peer || node.is_linked(&peer, "lan") {
             continue;

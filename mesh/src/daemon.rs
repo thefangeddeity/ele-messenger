@@ -73,6 +73,15 @@ pub async fn run(opts: Options) -> Result<()> {
     start(node, opts).await
 }
 
+/// Runs a node without the passphrase: it listens on every transport and
+/// reports who is around, but never advertises, dials or links.
+pub async fn scout(opts: Options) -> Result<()> {
+    let me = identity::Identity::load_or_create(&opts.state_dir)?;
+    let node = Arc::new(Node::scout(me, store::Store::in_memory()?));
+    tracing::info!("scouting as {} (no passphrase yet)", node.id_hex());
+    start(node, opts).await
+}
+
 async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
     if opts.lan {
         let n = node.clone();
