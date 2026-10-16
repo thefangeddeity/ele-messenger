@@ -80,6 +80,7 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
     adv.SetIsConnectable(true)?;
     provider.StartAdvertisingWithParameters(&adv)?;
     tracing::info!("ble: advertising the ELE service");
+    crate::ble::set_advertising(true);
 
     let mut peers: HashMap<String, Peer> = HashMap::new();
     while let Some(ev) = rx.recv().await {
@@ -99,6 +100,7 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
             }
         }
     }
+    crate::ble::set_advertising(false);
     let _ = provider.StopAdvertising();
     bail!("GATT service closed")
 }

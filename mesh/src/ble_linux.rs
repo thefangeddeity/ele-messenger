@@ -203,12 +203,12 @@ async fn any_connected(adapter: &Adapter) -> Result<bool> {
 }
 
 async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId, bluer::Device)>> {
+    // ELEMESH_BLE_DEBUG=1 scans unfiltered and logs everything heard, to tell
+    // "radio blocked" apart from "peer not advertising".
+    let debug = std::env::var_os("ELEMESH_BLE_DEBUG").is_some();
+    let uuids = if debug { Default::default() } else { [Uuid::from_u128(SERVICE_UUID)].into_iter().collect() };
     adapter
-        .set_discovery_filter(DiscoveryFilter {
-            uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
-            transport: DiscoveryTransport::Le,
-            ..Default::default()
-        })
+        .set_discovery_filter(DiscoveryFilter { uuids, transport: DiscoveryTransport::Le, ..Default::default() })
         .await?;
     // Discovery runs while this stream is alive.
     let events = adapter.discover_devices().await?;
@@ -230,10 +230,14 @@ async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId,
                 continue;
             }
             let uuids = device.uuids().await.ok().flatten().unwrap_or_default();
+            let name = device.name().await.ok().flatten();
+            if debug {
+                let rssi = device.rssi().await.ok().flatten();
+                tracing::info!("ble heard {addr} name={name:?} rssi={rssi:?} services={uuids:?}");
+            }
             if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) {
                 continue;
             }
-            let name = device.name().await.ok().flatten();
             let peer = name.as_deref().and_then(ble::peer_from_name);
             node.heard(peer, "ble", addr.to_string());
             if !ble::should_dial(&node.identity.id, peer) {

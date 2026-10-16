@@ -1431,6 +1431,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
 ]
 
@@ -1656,10 +1658,14 @@ dependencies = [
  "btleplug",
  "clap",
  "dirs",
+ "dispatch2",
  "futures",
  "hex",
  "hostname",
  "if-addrs",
+ "objc2 0.6.5",
+ "objc2-core-bluetooth",
+ "objc2-foundation 0.3.2",
  "postcard",
  "rand",
  "rusqlite",
@@ -3217,6 +3223,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79b30b9eacc37434a61377866f68b27acef9fa5496f25cc9ca8b2549032e0394"
 dependencies = [
  "bitflags 2.13.2",
+ "dispatch2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]
@@ -3318,6 +3325,7 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
 ]

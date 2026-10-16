@@ -36,3 +36,10 @@ windows = { version = "0.62.2", features = ["Devices_Bluetooth_GenericAttributeP
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 btleplug = "0.13.5"
 uuid = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSString", "NSUUID"] }
+objc2-core-bluetooth = { version = "0.3.2", default-features = false, features = ["std", "dispatch2", "CBATTRequest", "CBAdvertisementData", "CBAttribute", "CBCentral", "CBCharacteristic", "CBError", "CBManager", "CBPeer", "CBPeripheralManager", "CBService", "CBUUID"] }
+

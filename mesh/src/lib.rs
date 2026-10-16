@@ -7,6 +7,8 @@ mod ble;
 mod ble_central;
 #[cfg(target_os = "linux")]
 mod ble_linux;
+#[cfg(target_os = "macos")]
+mod ble_mac;
 #[cfg(target_os = "windows")]
 mod ble_windows;
 pub mod daemon;

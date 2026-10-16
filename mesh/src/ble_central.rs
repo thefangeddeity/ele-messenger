@@ -1,6 +1,6 @@
-//! BLE central role via btleplug (macOS, Windows): dials every ELE node it
-//! hears; the link table keeps one link per peer. On Windows, ble_windows
-//! advertises alongside it, so the machine can be found too.
+//! BLE central role via btleplug (macOS, Windows): dials the ELE nodes it
+//! hears; the link table keeps one link per peer. ble_mac and ble_windows
+//! advertise alongside it, so these machines can be found too.
 
 use anyhow::{Context, Result};
 use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, ScanFilter, WriteType};
@@ -45,7 +45,7 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
         }
         let peer = props.local_name.as_deref().and_then(ble::peer_from_name);
         node.heard(peer, "ble", format!("{id:?}"));
-        if peer == Some(node.identity.id) || peer.is_some_and(|x| node.is_linked(&x, "ble")) {
+        if !ble::should_dial(&node.identity.id, peer) || peer.is_some_and(|x| node.is_linked(&x, "ble")) {
             continue;
         }
         let key = peer.unwrap_or_else(|| dial_key(&format!("{id:?}")));
@@ -83,7 +83,10 @@ async fn dial(node: &Arc<Node>, _adapter: &Adapter, p: Peripheral) -> Result<()>
                 .characteristics()
                 .into_iter()
                 .find(|c| c.uuid == Uuid::from_u128(STREAM_UUID))
-                .context("peer has no ELE stream characteristic")?;
+                .with_context(|| {
+                    let found: Vec<String> = p.services().iter().map(|s| s.uuid.to_string()).collect();
+                    format!("peer has no ELE stream characteristic (services: {})", found.join(", "))
+                })?;
             p.subscribe(&ch).await?;
             anyhow::Ok((ch.clone(), p.notifications().await?))
         })
