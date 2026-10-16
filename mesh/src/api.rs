@@ -27,6 +27,17 @@ struct Post {
     #[serde(default)]
     nick: String,
     text: String,
+    /// When the message was actually said, if the caller knows better than we
+    /// do. Omitted, we stamp it ourselves, as before.
+    ///
+    /// This exists because a mesh that re-stamps is a mesh that destroys
+    /// identity. The suite addresses a message by the hash of its content and
+    /// its timestamp, so two nodes holding the same message agree on that with
+    /// no coordinator -- but only if the timestamp survives the trip. It did
+    /// not: the same message arriving over the LAN and over Bluetooth landed
+    /// as two different messages, and the house saw everything twice.
+    #[serde(default)]
+    ts_ms: Option<u64>,
 }
 
 fn err(e: anyhow::Error) -> Response {
@@ -52,7 +63,7 @@ async fn messages(State(node): State<Arc<Node>>, Path(room): Path<String>, Query
 }
 
 async fn post(State(node): State<Arc<Node>>, Path(room): Path<String>, Json(p): Json<Post>) -> Response {
-    match node.post(&room, p.nick.trim(), &p.text) {
+    match node.post(&room, p.nick.trim(), &p.text, p.ts_ms) {
         Ok(e) => Json(json!({ "author": hex::encode(e.author), "seq": e.seq, "ts_ms": e.ts_ms })).into_response(),
         Err(e) => err(e),
     }

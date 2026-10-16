@@ -231,21 +231,35 @@ impl Node {
         }
     }
 
-    pub fn post(&self, room: &str, nick: &str, text: &str) -> Result<Entry> {
+    pub fn post(&self, room: &str, nick: &str, text: &str, said_at: Option<u64>) -> Result<Entry> {
         let room = room.trim();
         if room.is_empty() || room.len() > MAX_ROOM || nick.len() > MAX_NICK || text.len() > MAX_TEXT || text.is_empty() {
             bail!("room 1-{MAX_ROOM} bytes, nick up to {MAX_NICK}, text 1-{MAX_TEXT}");
         }
+        // A caller may know when the message was said better than we do -- it
+        // may have been sitting in a store while the radios were off, which is
+        // the whole point of store-and-hold. An older stamp is therefore
+        // ordinary, and accepted as given.
+        //
+        // A stamp in the FUTURE is not: ts_ms drives both ordering and the
+        // retention cutoff, so one far enough ahead would sort above every
+        // real message and never be pruned. Clamped rather than rejected,
+        // because a peer with a skewed clock should still be heard.
+        let now = now_ms();
+        let ts_ms = said_at.map(|t| t.min(now)).unwrap_or(now);
         let entry = self.with_store(|s| {
             let e = Entry {
                 author: self.identity.id,
                 seq: s.next_seq(&self.identity.id)?,
-                ts_ms: now_ms(),
+                ts_ms,
                 room: room.to_string(),
                 nick: nick.to_string(),
                 text: text.to_string(),
             };
-            s.insert(&e, now_ms())?;
+            // The second argument is when WE saw it, which is now regardless
+            // of when it was said. Local arrival drives the replication
+            // cursor; it is not the message's timestamp and never was.
+            s.insert(&e, now)?;
             Ok(e)
         })?;
         self.changed.notify_waiters();

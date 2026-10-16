@@ -154,6 +154,7 @@ impl Drop for LinkGuard {
 mod tests {
     use super::*;
     use crate::identity::{Identity, derive_psk};
+    use crate::node::now_ms;
     use crate::store::Store;
 
     fn node(pass: &str) -> Arc<Node> {
@@ -174,18 +175,41 @@ mod tests {
         false
     }
 
+    // A message said earlier keeps the time it was said, and a message
+    // claiming to be from the future does not get to sort above everything
+    // real. Both matter because ts_ms is half of a message's identity: the
+    // suite addresses messages by content hash, so a transport that re-stamps
+    // turns one message into two, which is exactly how the house ended up
+    // seeing every message twice once it had both a LAN path and a mesh path.
+    #[test]
+    fn a_supplied_timestamp_is_kept_and_a_future_one_is_clamped() {
+        let n = node("stamp passphrase");
+        let said = 1_700_000_000_000u64;
+        let kept = n.post("home", "a", "from the store", Some(said)).unwrap();
+        assert_eq!(kept.ts_ms, said, "an older stamp must survive the trip");
+
+        let far = now_ms() + 86_400_000;
+        let clamped = n.post("home", "a", "from the future", Some(far)).unwrap();
+        assert!(clamped.ts_ms <= now_ms(), "a future stamp must be clamped to now");
+
+        // Omitted, we stamp it ourselves -- the behaviour every existing
+        // caller depends on.
+        let own = n.post("home", "a", "right now", None).unwrap();
+        assert!(own.ts_ms >= kept.ts_ms);
+    }
+
     #[tokio::test]
     async fn history_syncs_both_ways_on_link_up() {
         let (a, b) = (node("same passphrase"), node("same passphrase"));
-        a.post("home", "a", "written while alone").unwrap();
-        a.post("home", "a", "second").unwrap();
-        b.post("home", "b", "from b").unwrap();
+        a.post("home", "a", "written while alone", None).unwrap();
+        a.post("home", "a", "second", None).unwrap();
+        b.post("home", "b", "from b", None).unwrap();
         let (sa, sb) = tokio::io::duplex(4096);
         tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
         tokio::spawn(run(sb, false, "test", "pipe".into(), b.clone()));
         assert!(settle(|| count(&a) == 3 && count(&b) == 3).await, "a={} b={}", count(&a), count(&b));
         // Live message after the link is up.
-        b.post("home", "b", "live").unwrap();
+        b.post("home", "b", "live", None).unwrap();
         assert!(settle(|| count(&a) == 4).await);
     }
 
@@ -199,7 +223,7 @@ mod tests {
         tokio::spawn(run(y1, true, "test", "m-c".into(), m.clone()));
         tokio::spawn(run(y2, false, "test", "m-c".into(), c.clone()));
         assert!(settle(|| a.links().len() == 1 && c.links().len() == 1).await);
-        a.post("home", "a", "two hops").unwrap();
+        a.post("home", "a", "two hops", None).unwrap();
         assert!(settle(|| count(&c) == 1).await, "flood did not reach c");
     }
 
@@ -234,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn wrong_passphrase_cannot_link() {
         let (a, b) = (node("our household"), node("a stranger's mesh"));
-        a.post("home", "a", "private").unwrap();
+        a.post("home", "a", "private", None).unwrap();
         let (sa, sb) = tokio::io::duplex(4096);
         let ra = tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
         let rb = tokio::spawn(run(sb, false, "test", "pipe".into(), b.clone()));
