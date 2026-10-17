@@ -116,7 +116,9 @@ Open **http://127.0.0.1:8740/** in any browser on the same machine.
 
 - **Room**: everyone who types the same room name is in the same chat
   (default `home`).
-- **Name**: what others see next to your messages.
+- **Name**: what others see next to your messages. Left empty, messages carry
+  this machine's name: its host name, or whatever `elemesh name "Kitchen laptop"`
+  set (restart elemesh afterwards).
 - The line at the top shows who you are linked to right now. *"no peers
   in range"* means messages are saved and will go out when someone appears.
 
