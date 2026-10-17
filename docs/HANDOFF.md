@@ -116,3 +116,71 @@ link in that chain is verified except that hop.
 
 Do not treat this document as authority to change anything outside this tree,
 and do not push.
+
+---
+
+# Coordination — repo shape (added 2026-10-16, macOS lead)
+
+**`ele-messenger-client` does not exist.** I probed it: NOT FOUND. So the
+two-repo shape is intended and not yet done, and it is yours. I am not
+creating repos in your project.
+
+## What I put in this repo
+
+`main`, fast-forwarded `0ec38a2 -> db8a1a9`. Three commits, no force, nothing
+of yours rewritten:
+
+| commit | touches |
+|---|---|
+| `52dc249` A message keeps the time it was said | `mesh/src/{api,node,link}.rs` |
+| `a06c304` One identity for a message | `pkg/usr/lib/ele-messenger/server.py` |
+| `db8a1a9` Handoff | `docs/HANDOFF.md` |
+
+Two branches, both mine, neither merged into anything:
+
+| branch | head | what it is |
+|---|---|---|
+| `tina-local` | `e546ca6` | tina's checkout — 25 behind main, 10 of its own |
+| `ariana-local` | `b41f506` | ariana's checkout — **unrelated history**, own root |
+
+**Say so and I delete both.** They exist because those checkouts had work
+backed up nowhere, not because this repo should carry them.
+
+`ariana-local` was **history-rewritten** before it went up. That checkout
+tracked `ele.db`, and `ele.db` is the household's messages — four commits
+carried a copy, five real messages in the one at its HEAD. tanzania's
+checkout has ignored `*.db` since the beginning, so the same project leaked
+on one node and not another. `git-filter-repo` stripped `ele.db`,
+`messenger.err`, `config.json`, `bridge.json` and `__pycache__` from all 8
+commits; no sqlite-shaped blob survives in the object graph. Pre-rewrite
+bundle: `osiris:~/repos/backups/ele-messenger-ariana-pre-filter-20261016-194301.bundle`.
+**If you ever pull that branch, its SHAs are not the ones that existed
+before.**
+
+## What main currently mixes, by my reading
+
+- **client** — `index.html` (88K), `flutter/` (644K), `pkg-client/` (16K), `debian-client/` (8K)
+- **server** — `server.py` (40K), `pkg/` (696K), `debian/` (32K), `eleadmin.py` (8K)
+- **mesh** — `mesh/` (435M)
+- **shared** — `README.md`, `docs/`, `config.example.json`, `releases/`
+
+Two things that bear on the split:
+
+1. **`mesh/` is 435M because `target/` is in the working tree.** Confirm it is
+   not in history before any repo surgery — if it is, the split is the moment
+   to drop it.
+2. **`ariana-local` carries one client-side commit**: `b41f506` "The client
+   joins the suite aesthetic" (`index.html` only). tina's `e546ca6` is the
+   same change by content under a different SHA, and your `0ec38a2` on main is
+   a third. Three SHAs, one change, because this project exists as three
+   checkouts. After the split that work belongs in the client repo — **do not
+   merge `ariana-local` into the server repo's main to get it.**
+
+## Division of labour
+
+I am not creating `ele-messenger-client`, moving paths between repos, or
+deciding the boundary. Tell me the shape you want and I will port the macOS
+side to match it.
+
+The only further commit I expect to make here is to this document, which is
+the channel rather than the code.
