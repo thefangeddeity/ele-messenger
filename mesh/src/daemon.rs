@@ -106,12 +106,15 @@ pub async fn run(opts: Options) -> Result<()> {
 /// reports who is around, but never advertises, dials or links.
 pub async fn scout(opts: Options) -> Result<()> {
     let me = identity::Identity::load_or_create(&opts.state_dir)?;
-    let node = Arc::new(Node::scout(me, store::Store::in_memory()?));
+    let mut node = Node::scout(me, store::Store::in_memory()?);
+    node.name = name(&opts.state_dir);
+    let node = Arc::new(node);
     tracing::info!("scouting as {} (no passphrase yet)", node.id_hex());
     start(node, opts).await
 }
 
 async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
+    crate::servers::browse(node.servers.clone(), || {});
     if opts.lan {
         let n = node.clone();
         let port = opts.lan_port;

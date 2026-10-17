@@ -85,6 +85,7 @@ async fn status(State(node): State<Arc<Node>>) -> Response {
         "entries": entries,
         "links": node.links(),
         "nearby": node.nearby(),
+        "servers": crate::servers::list(&node.servers),
     }))
     .into_response()
 }

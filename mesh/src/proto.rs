@@ -23,6 +23,9 @@ pub enum Wire {
     Hello { version: u8 },
     Summary(Vec<AuthorState>),
     Entries { ttl: u8, entries: Vec<Entry> },
+    /// The sender's machine name, sent once a link is up. Last, so nodes that
+    /// predate it only drop this one frame.
+    Name(String),
 }
 
 impl Wire {

@@ -6,7 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
-mod servers;
+mod theme;
 
 use backend::{Message, Mode, Status};
 use eframe::egui;
@@ -42,8 +42,8 @@ struct App {
     rooms: Arc<Mutex<Vec<String>>>,
     feed: Arc<Mutex<Feed>>,
     generation: Arc<AtomicU64>,
-    servers: servers::Servers,
     ctx: egui::Context,
+    light: bool,
     nick: String,
     room: String,
     new_room: String,
@@ -58,7 +58,6 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
         let get = |k: &str, d: &str| cc.storage.and_then(|s| s.get_string(k)).unwrap_or_else(|| d.to_string());
-        let repaint = ctx.clone();
         let app = Self {
             backend: Arc::new(Mutex::new(backend::Backend::new())),
             mode: Arc::new(Mutex::new(Mode::Starting)),
@@ -66,8 +65,8 @@ impl App {
             rooms: Default::default(),
             feed: Default::default(),
             generation: Default::default(),
-            servers: servers::browse(move || repaint.request_repaint()),
             ctx,
+            light: get("light", "") == "true",
             nick: get("nick", ""),
             room: get("room", "home"),
             new_room: String::new(),
@@ -77,6 +76,7 @@ impl App {
             join_error: Default::default(),
             send_error: Default::default(),
         };
+        theme::apply(&app.ctx, app.light);
         app.start_backend();
         app.start_status_poll();
         app.follow(app.room.clone());
@@ -172,14 +172,16 @@ struct Machine {
     heard: Vec<String>,
     seen_s: u64,
     ips: Vec<String>,
+    name: Option<String>,
 }
 
 fn machines(st: &Status) -> Vec<Machine> {
     let mut by: BTreeMap<String, Machine> = BTreeMap::new();
     let ip_of = |via: &str| via.rsplit_once(':').map(|(h, _)| h).unwrap_or(via).trim_matches(['[', ']']).to_string();
     for l in &st.links {
-        let m = by.entry(l.peer.clone()).or_insert_with(|| Machine { id: Some(l.peer.clone()), linked: vec![], heard: vec![], seen_s: l.heard_s, ips: vec![] });
+        let m = by.entry(l.peer.clone()).or_insert_with(|| Machine { id: Some(l.peer.clone()), linked: vec![], heard: vec![], seen_s: l.heard_s, ips: vec![], name: None });
         m.linked.push(l.transport.clone());
+        m.name = m.name.take().or(l.name.clone());
         m.seen_s = m.seen_s.min(l.heard_s);
         if l.transport == "lan" {
             m.ips.push(ip_of(&l.via));
@@ -187,8 +189,9 @@ fn machines(st: &Status) -> Vec<Machine> {
     }
     for n in &st.nearby {
         let key = n.peer.clone().unwrap_or_else(|| format!("?{}", n.via));
-        let m = by.entry(key).or_insert_with(|| Machine { id: n.peer.clone(), linked: vec![], heard: vec![], seen_s: n.seen_s, ips: vec![] });
+        let m = by.entry(key).or_insert_with(|| Machine { id: n.peer.clone(), linked: vec![], heard: vec![], seen_s: n.seen_s, ips: vec![], name: None });
         m.heard.push(n.transport.clone());
+        m.name = m.name.take().or(n.name.clone());
         m.seen_s = m.seen_s.min(n.seen_s);
         if n.transport == "lan" {
             m.ips.push(n.via.clone());
@@ -221,6 +224,7 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("nick", self.nick.clone());
         storage.set_string("room", self.room.clone());
+        storage.set_string("light", self.light.to_string());
     }
 
     fn on_exit(&mut self) {
@@ -230,13 +234,18 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let mode = *self.mode.lock().unwrap();
         let status = self.status.lock().unwrap().clone();
-        let servers: Vec<servers::Server> = self.servers.lock().unwrap().values().cloned().collect();
+        let servers: Vec<backend::Server> = status.as_ref().map(|s| s.servers.clone()).unwrap_or_default();
         let list = status.as_ref().map(machines).unwrap_or_default();
 
         egui::Panel::top("head").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.heading("ELE Mesh");
+                let switch = if self.light { "dark" } else { "light" };
+                if ui.small_button(switch).on_hover_text("Switch between the light and dark look").clicked() {
+                    self.light = !self.light;
+                    theme::apply(ui.ctx(), self.light);
+                }
                 let (chip, tip) = match mode {
                     Mode::Starting => ("starting…", "Looking for an ELE daemon on this computer"),
                     Mode::Daemon => ("this computer's ELE daemon", "elemesh runs on this computer; the client shows it"),
@@ -273,7 +282,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine], servers: &[servers::Server]) {
+    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine], servers: &[backend::Server]) {
         ui.add_space(4.0);
         ui.strong("Around you: ELE Mesh");
         ui.label(egui::RichText::new("Machines heard nearby. Linked ones share messages now.").small().weak());
@@ -289,9 +298,18 @@ impl App {
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let dot = if m.linked.is_empty() { "○" } else { "●" };
-                    let name = m.id.as_deref().map(short).unwrap_or_else(|| "ELE machine (unnamed)".into());
-                    ui.label(egui::RichText::new(format!("{dot} {name}")).monospace().strong());
+                    let t = theme::tokens(self.light);
+                    let (dot, colour) = if m.linked.is_empty() { ("○", t.text_muted) } else { ("●", t.success) };
+                    // The name it gave over a link; else the host name its server
+                    // announces; else the start of its id.
+                    let host = server.map(|s| s.host.clone()).filter(|h| !h.is_empty());
+                    let id = m.id.as_deref().map(short);
+                    let name = m.name.clone().or(host).or(id.clone()).unwrap_or_else(|| "ELE machine (unnamed)".into());
+                    ui.label(egui::RichText::new(dot).color(colour));
+                    ui.label(egui::RichText::new(&name).strong());
+                    if let Some(id) = id.filter(|i| *i != name) {
+                        ui.label(egui::RichText::new(id).small().weak());
+                    }
                     if server.is_some() {
                         ui.label(egui::RichText::new("also a server").small()).on_hover_text("This machine also runs an ELE server");
                     }
@@ -324,7 +342,7 @@ impl App {
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.label(egui::RichText::new(&s.name).strong());
-                let url = s.url();
+                let url = s.url.clone();
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&url).small().monospace());
                     if ui.button("Open").on_hover_text("Open this server's page in your browser").clicked() {
@@ -338,7 +356,7 @@ impl App {
     fn join_card(&mut self, ui: &mut egui::Ui, list: &[Machine]) {
         ui.add_space(30.0);
         ui.vertical_centered(|ui| {
-            ui.set_max_width(440.0);
+            ui.set_max_width(ui.available_width().min(440.0));
             ui.heading("Join the ELE Mesh");
             ui.add_space(8.0);
             let n = list.len();

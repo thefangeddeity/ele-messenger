@@ -268,6 +268,21 @@ mod tests {
         assert!(a.links().is_empty() && b.links().is_empty());
     }
 
+    #[tokio::test]
+    async fn linked_nodes_learn_each_others_names() {
+        let named = |n: &str| {
+            let mut node = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
+            node.name = n.into();
+            Arc::new(node)
+        };
+        let (a, b) = (named("kitchen"), named("attic"));
+        let (sa, sb) = tokio::io::duplex(4096);
+        tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
+        tokio::spawn(run(sb, false, "test", "pipe".into(), b.clone()));
+        let name = |n: &Node| n.links().first().and_then(|l| l.name.clone());
+        assert!(settle(|| name(&a).as_deref() == Some("attic") && name(&b).as_deref() == Some("kitchen")).await);
+    }
+
     #[test]
     fn a_message_without_a_nick_carries_the_machine_name() {
         let mut n = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());

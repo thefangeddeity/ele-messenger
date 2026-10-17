@@ -2,12 +2,13 @@
 //! `_ele-messenger._tcp`. This keeps the current list.
 
 use mdns_sd::{ServiceDaemon, ServiceEvent};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 const SERVICE: &str = "_ele-messenger._tcp.local.";
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Server {
     pub name: String,
     pub host: String,
@@ -35,10 +36,28 @@ impl Server {
 
 pub type Servers = Arc<Mutex<BTreeMap<String, Server>>>;
 
+/// What the local API reports for each server.
+#[derive(Serialize)]
+pub struct ServerStatus {
+    pub name: String,
+    /// The host name it announces, without .local.
+    pub host: String,
+    pub url: String,
+    pub addrs: Vec<String>,
+}
+
+pub fn list(servers: &Servers) -> Vec<ServerStatus> {
+    servers
+        .lock()
+        .unwrap()
+        .values()
+        .map(|s| ServerStatus { name: s.name.clone(), host: s.host.trim_end_matches(".local").to_string(), url: s.url(), addrs: s.addrs.clone() })
+        .collect()
+}
+
 /// Browses in the background; `changed` runs after every update.
-pub fn browse(changed: impl Fn() + Send + 'static) -> Servers {
-    let servers: Servers = Default::default();
-    let out = servers.clone();
+pub fn browse(servers: Servers, changed: impl Fn() + Send + 'static) {
+    let out = servers;
     std::thread::spawn(move || {
         let mdns = match ServiceDaemon::new() {
             Ok(m) => m,
@@ -79,5 +98,4 @@ pub fn browse(changed: impl Fn() + Send + 'static) -> Servers {
             }
         }
     });
-    servers
 }

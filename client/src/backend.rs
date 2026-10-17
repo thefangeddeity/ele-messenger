@@ -32,6 +32,8 @@ pub struct Status {
     pub links: Vec<Link>,
     #[serde(default)]
     pub nearby: Vec<Nearby>,
+    #[serde(default)]
+    pub servers: Vec<Server>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -40,6 +42,18 @@ pub struct Link {
     pub transport: String,
     pub via: String,
     pub heard_s: u64,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// An ELE server the node found on the local network.
+#[derive(Deserialize, Clone)]
+pub struct Server {
+    pub name: String,
+    #[serde(default)]
+    pub host: String,
+    pub url: String,
+    pub addrs: Vec<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -48,6 +62,8 @@ pub struct Nearby {
     pub transport: String,
     pub via: String,
     pub seen_s: u64,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]

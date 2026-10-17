@@ -38,6 +38,8 @@ pub struct NearbyStatus {
     pub transport: &'static str,
     pub via: String,
     pub seen_s: u64,
+    /// Known only once some link to this node has told us.
+    pub name: Option<String>,
 }
 
 struct Heard {
@@ -59,6 +61,8 @@ pub struct LinkStatus {
     pub up_s: u64,
     /// Seconds since the last frame from this peer.
     pub heard_s: u64,
+    /// The name the peer gave over this link.
+    pub name: Option<String>,
 }
 
 pub struct Node {
@@ -76,6 +80,10 @@ pub struct Node {
     /// advertisement.
     pub name: String,
     nearby: Mutex<HashMap<String, Heard>>,
+    /// ELE servers announced on the local network.
+    pub servers: crate::servers::Servers,
+    /// Names peers gave over encrypted links.
+    names: Mutex<HashMap<NodeId, String>>,
 }
 
 enum Dial {
@@ -97,6 +105,8 @@ impl Node {
             changed: Notify::new(),
             scout: false,
             name: String::new(),
+            servers: Default::default(),
+            names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
         }
     }
@@ -126,6 +136,7 @@ impl Node {
                 transport: h.transport,
                 via: h.via.clone(),
                 seen_s: h.at.elapsed().as_secs(),
+                name: h.peer.and_then(|p| self.name_of(&p)),
             })
             .collect()
     }
@@ -194,7 +205,7 @@ impl Node {
             links.remove(&old_id);
         }
         let id = self.next_link.fetch_add(1, Ordering::Relaxed);
-        let greeting = [Wire::Hello { version: PROTOCOL_VERSION }, Wire::Summary(self.summary())];
+        let greeting = [Wire::Hello { version: PROTOCOL_VERSION }, Wire::Summary(self.summary()), Wire::Name(self.name.clone())];
         for w in greeting {
             if let Ok(b) = w.encode() {
                 let _ = tx.try_send(b);
@@ -221,6 +232,7 @@ impl Node {
                 initiator: l.initiator,
                 up_s: l.since.elapsed().as_secs(),
                 heard_s: l.last_rx.elapsed().as_secs(),
+                name: self.name_of(&l.peer),
             })
             .collect()
     }
@@ -253,6 +265,10 @@ impl Node {
         }
     }
 
+    fn name_of(&self, peer: &NodeId) -> Option<String> {
+        self.names.lock().unwrap().get(peer).cloned()
+    }
+
     pub fn handle(self: &Arc<Self>, link: u64, msg: Wire) {
         if let Some(l) = self.links.lock().unwrap().get_mut(&link) {
             l.last_rx = Instant::now();
@@ -261,6 +277,13 @@ impl Node {
             Wire::Hello { version } => {
                 if version != PROTOCOL_VERSION {
                     tracing::warn!("peer speaks protocol v{version}, we speak v{PROTOCOL_VERSION}");
+                }
+            }
+            Wire::Name(name) => {
+                let name = name.trim();
+                let peer = self.links.lock().unwrap().get(&link).map(|l| l.peer);
+                if let Some(p) = peer.filter(|_| !name.is_empty() && name.len() <= MAX_NICK) {
+                    self.names.lock().unwrap().insert(p, name.to_string());
                 }
             }
             Wire::Summary(theirs) => {
