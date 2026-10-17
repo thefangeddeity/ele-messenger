@@ -4,58 +4,133 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ELE Mesh</title>
+<script>
+  // The suite's light/dark switch, read before first paint.
+  try { if (localStorage.getItem("lightTheme") === "true") document.documentElement.setAttribute("data-theme", "light"); } catch (e) {}
+</script>
 <style>
-  :root { --bg:#0f2a58; --panel:#162e58; --bar:#4a7ab8; --text:#ddeeff; --muted:#8aa4c4; --me:#2a4a7a; --ok:#5dc200; --warn:#e0a030; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; height:100vh; }
-  header { background:var(--bar); padding:8px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  header b { font-size:16px; }
-  #links { font-size:13px; }
-  #links.none { color:#ffd9a0; }
-  input { background:#0a2050; color:var(--text); border:1px solid #2a4a7a; border-radius:4px; padding:6px 8px; font:inherit; }
-  #log { flex:1; overflow-y:auto; padding:12px 16px; }
-  .m { margin:4px 0; max-width:720px; padding:6px 10px; border-radius:6px; background:var(--panel); }
-  .m.me { background:var(--me); margin-left:auto; }
-  .m .who { font-size:12px; color:var(--muted); }
-  form { display:flex; gap:8px; padding:8px 16px 16px; }
-  #text { flex:1; }
-  button { background:var(--bar); color:#fff; border:0; border-radius:4px; padding:6px 14px; font:inherit; cursor:pointer; }
+  /* Suite tokens, by name and value, shared with the camera viewer, the
+     server's web client and the ELE desktop app. */
+  :root {
+    --bg: #111113; --panel: #1c1c1e; --panel-2: #242426;
+    --border: #38383a; --border-strong: #48484a;
+    --text: #f5f5f7; --text-dim: #98989d; --text-muted: #6e6e73;
+    --accent: #0a84ff; --success: #30d158; --danger: #ff453a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  html[data-theme="light"] {
+    --bg: #e7e6df; --panel: #fcfbf7; --panel-2: #f0efe9;
+    --border: #dcdad0; --border-strong: #cbc9bd;
+    --text: #073642; --text-dim: #586e75; --text-muted: #93a1a1;
+    --accent: #0a62c9; --success: #1b7a46;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 14px/1.45 var(--mono); background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 12px 16px 10px; border-bottom: 1px solid var(--border); }
+  .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .top h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .chip { font-size: 12px; color: var(--text-dim); }
+  .me-line { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+  .about { margin: 6px 0 0; color: var(--text-dim); font-size: 13px; }
+  button, .btn { font: inherit; font-size: 13px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; text-decoration: none; }
+  button:hover, .btn:hover { border-color: var(--border-strong); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside { width: 300px; border-right: 1px solid var(--border); overflow-y: auto; padding: 12px; }
+  aside h2 { font-size: 14px; margin: 4px 0 2px; font-weight: 600; }
+  .hint { font-size: 11.5px; color: var(--text-dim); margin: 0 0 8px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+  .card .row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .card .sub { font-size: 12px; color: var(--text-dim); }
+  .id { font-size: 11.5px; color: var(--text-muted); }
+  .tag { font-size: 11.5px; color: var(--text-dim); }
+  .dot.on { color: var(--success); } .dot.off { color: var(--text-muted); }
+  .url { font-size: 12px; color: var(--text-dim); word-break: break-all; }
+  section.chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .bar { display: flex; gap: 10px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; font-size: 13px; }
+  #log { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .m { margin: 4px 0; max-width: 720px; padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); }
+  .m.mine { background: var(--panel-2); margin-left: auto; }
+  .m .who { font-size: 12px; color: var(--text-dim); }
+  form { display: flex; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--border); }
+  #text { flex: 1; }
+  .join { margin: 40px auto; max-width: 440px; text-align: center; color: var(--text-dim); padding: 0 16px; }
+  .join h2 { color: var(--text); font-size: 17px; }
+  .join code { color: var(--text); }
+  @media (max-width: 700px) { main { flex-direction: column; } aside { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; } .me-line { margin-left: 0; } }
 </style>
 </head>
 <body>
 <header>
-  <b>ELE Mesh</b>
-  <label>Room <input id="room" size="10" value="home"></label>
-  <label>Name <input id="nick" size="10"></label>
-  <span id="links">…</span>
+  <div class="top">
+    <h1>ELE Mesh</h1>
+    <button id="theme" type="button" title="Switch between the light and dark look"></button>
+    <span class="chip" id="mode">…</span>
+    <span class="me-line" id="me"></span>
+  </div>
+  <p class="about">One shared group for the ELE machines within reach of this one: over Bluetooth and Wi-Fi,
+    no internet or server needed, and carried further by any machine in between. Everyone with the mesh
+    passphrase reads every room.</p>
 </header>
-<div id="log" aria-live="polite"></div>
-<form id="f">
-  <input id="text" autocomplete="off" placeholder="Message" maxlength="2048">
-  <button>Send</button>
-</form>
+<main>
+  <aside>
+    <h2>Around you: ELE Mesh</h2>
+    <p class="hint">Machines heard nearby. Linked ones share messages now.</p>
+    <div id="machines"></div>
+    <h2 style="margin-top:14px">ELE servers</h2>
+    <p class="hint">The full chat platform: accounts, direct messages, groups, images. Works while the server and the network are up.</p>
+    <div id="servers"></div>
+  </aside>
+  <section class="chat" id="chat">
+    <div class="bar">
+      <label>Room <input id="room" size="12" list="rooms" value="home"></label>
+      <datalist id="rooms"></datalist>
+      <label>Name <input id="nick" size="14"></label>
+    </div>
+    <div id="log" aria-live="polite"></div>
+    <form id="f">
+      <input id="text" autocomplete="off" placeholder="Message" maxlength="2048">
+      <button class="primary">Send</button>
+    </form>
+  </section>
+  <section class="chat" id="notjoined" hidden>
+    <div class="join">
+      <h2>This machine hasn't joined the ELE Mesh</h2>
+      <p>It can see who is around but can't read or send until it has the mesh passphrase:
+        the same one on every machine in your group.</p>
+      <p>Open the <b>ELE</b> app and enter it there, or run<br><code>elemesh init --passphrase '…'</code><br>and restart elemesh.</p>
+    </div>
+  </section>
+</main>
 <script>
 const $ = id => document.getElementById(id);
 const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set(k,v){ try { localStorage.setItem(k,v); } catch {} } };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 $("nick").value = store.get("nick");
 $("room").value = store.get("room") || "home";
-let me = "", cursor = 0, gen = 0;
-let msgs = [];
+let me = "", cursor = 0, gen = 0, msgs = [];
+
+function themeLabel() { $("theme").textContent = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light"; }
+$("theme").onclick = () => {
+  const light = document.documentElement.getAttribute("data-theme") !== "light";
+  if (light) document.documentElement.setAttribute("data-theme", "light"); else document.documentElement.removeAttribute("data-theme");
+  store.set("lightTheme", String(light)); themeLabel();
+};
+themeLabel();
 
 function render() {
   const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-  log.replaceChildren(...msgs.map(m => {
-    const d = document.createElement("div");
-    d.className = "m" + (m.author === me ? " me" : "");
-    const who = document.createElement("div");
-    who.className = "who";
-    who.textContent = (m.nick || m.author.slice(0, 6)) + " · " + new Date(m.ts_ms).toLocaleTimeString();
-    const t = document.createElement("div");
-    t.textContent = m.text;
-    d.append(who, t);
+  log.replaceChildren(...(msgs.length ? msgs.map(m => {
+    const d = el("div", "m" + (m.author === me ? " mine" : ""));
+    const who = el("div", "who", (m.nick || m.author.slice(0, 8)) + " · " + new Date(m.ts_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    who.title = "from machine " + m.author.slice(0, 8);
+    d.append(who, el("div", null, m.text));
     return d;
-  }));
+  }) : [el("div", "hint", "No messages in this room yet.")]));
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
@@ -63,8 +138,7 @@ async function poll(g) {
   const room = encodeURIComponent($("room").value.trim() || "home");
   while (g === gen) {
     try {
-      const r = await fetch(`/v1/rooms/${room}/messages?after=${cursor}&wait=25`);
-      const j = await r.json();
+      const j = await (await fetch(`/v1/rooms/${room}/messages?after=${cursor}&wait=25`)).json();
       if (g !== gen) return;
       if (j.messages.length) {
         msgs.push(...j.messages);
@@ -81,17 +155,68 @@ function switchRoom() {
   gen++; cursor = 0; msgs = []; render(); poll(gen);
 }
 
+const transportName = t => ({ ble: "Bluetooth", lan: "Wi-Fi/LAN" }[t] || t);
+
+// One row per machine, merging its links and what we hear of it, as the app does.
+function machines(s) {
+  const by = new Map();
+  const ipOf = via => via.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+  const get = (key, id, seen) => {
+    if (!by.has(key)) by.set(key, { id, linked: [], heard: [], seen, ips: [], name: null });
+    return by.get(key);
+  };
+  for (const l of s.links) {
+    const m = get(l.peer, l.peer, l.heard_s);
+    if (!m.linked.includes(l.transport)) m.linked.push(l.transport);
+    m.seen = Math.min(m.seen, l.heard_s); m.name = m.name || l.name;
+    if (l.transport === "lan") m.ips.push(ipOf(l.via));
+  }
+  for (const n of s.nearby) {
+    const m = get(n.peer || "?" + n.via, n.peer, n.seen_s);
+    if (!m.heard.includes(n.transport)) m.heard.push(n.transport);
+    m.seen = Math.min(m.seen, n.seen_s); m.name = m.name || n.name;
+    if (n.transport === "lan") m.ips.push(n.via);
+  }
+  return [...by.values()].sort((a, b) => (a.linked.length ? 0 : 1) - (b.linked.length ? 0 : 1) || a.seen - b.seen);
+}
+
+function drawAround(s) {
+  const servers = s.servers || [];
+  const list = machines(s);
+  $("machines").replaceChildren(...(list.length ? list.map(m => {
+    const server = servers.find(sv => m.ips.some(ip => sv.addrs.includes(ip)));
+    const id = m.id ? m.id.slice(0, 8) : null;
+    const name = m.name || (server && server.host) || id || "ELE machine (unnamed)";
+    const c = el("div", "card"), row = el("div", "row");
+    row.append(el("span", "dot " + (m.linked.length ? "on" : "off"), m.linked.length ? "●" : "○"), el("b", null, name));
+    if (id && id !== name) row.append(el("span", "id", id));
+    if (server) row.append(el("span", "tag", "also a server"));
+    const how = m.linked.length ? `linked over ${m.linked.map(transportName).join(", ")}` : `heard over ${m.heard.map(transportName).join(", ")}`;
+    c.append(row, el("div", "sub", `${how} · ${m.seen} s ago`));
+    return c;
+  }) : [el("p", "hint", "No ELE machines around yet. Listening over Bluetooth and Wi-Fi…")]));
+  $("servers").replaceChildren(...(servers.length ? servers.map(sv => {
+    const c = el("div", "card"), row = el("div", "row");
+    const open = el("a", "btn", "Open"); open.href = sv.url; open.target = "_blank"; open.rel = "noopener";
+    row.append(el("span", "url", sv.url), open);
+    c.append(el("b", null, sv.name), row);
+    return c;
+  }) : [el("p", "hint", "No ELE servers around.")]));
+}
+
 async function status() {
   try {
     const s = await (await fetch("/v1/status")).json();
     me = s.node;
+    const joined = s.joined !== false;
+    $("mode").textContent = joined ? "joined" : "not joined";
+    $("me").textContent = s.name ? `this machine: ${s.name} (${s.node.slice(0, 8)})` : `this machine ${s.node.slice(0, 8)}`;
     $("nick").placeholder = s.name || "";
-    const el = $("links");
-    el.className = s.links.length ? "" : "none";
-    el.textContent = s.links.length
-      ? s.links.map(l => `${l.peer.slice(0, 6)} via ${l.transport}`).join(", ")
-      : "no peers in range — messages wait here until one appears";
-  } catch { $("links").textContent = "daemon not responding"; }
+    $("chat").hidden = !joined; $("notjoined").hidden = joined;
+    drawAround(s);
+    const rooms = await (await fetch("/v1/rooms")).json();
+    $("rooms").replaceChildren(...rooms.rooms.map(r => { const o = el("option"); o.value = r; return o; }));
+  } catch { $("mode").textContent = "elemesh not responding"; }
 }
 
 $("room").addEventListener("change", switchRoom);
