@@ -1,3 +1,15 @@
+ele-messenger (1.4.1-1) resolute; urgency=medium
+
+  * Server: every database connection is closed. A long-running server
+    leaked one per request until it could no longer open its database,
+    and the web client then showed a login form.
+  * ELE Mesh: machines tell each other their names inside the encrypted
+    link; messages sent without a name carry the machine's name; elemesh
+    lists the ELE servers it finds on the network.
+  * The mesh page and the desktop app share the suite's look and layout.
+
+ -- thefangeddeity <thefangeddeity@users.noreply.github.com>  Sat, 17 Oct 2026 06:10:00 +0000
+
 ele-messenger (1.4.0-1) resolute; urgency=medium
 
   * ELE Mesh: elemesh, a per-machine daemon that carries chat between
