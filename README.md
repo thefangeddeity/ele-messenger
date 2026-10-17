@@ -55,7 +55,7 @@ The point of the project is what happens as each layer fails.
 | internet | everything | the tailnet and the LAN still work |
 | tailnet | everything, off-site | the LAN still works |
 | **LAN / Wi-Fi** | **everything, in the house** | a node can host its own access point |
-| mesh / BLE | text and alerts | *(planned; see Status)* |
+| mesh / BLE | text | two laptops on battery, in Bluetooth range |
 
 Nodes find each other over **mDNS** — no addresses are configured anywhere —
 and a node's view of the others degrades to whatever transport is left. With
@@ -107,10 +107,24 @@ socket per user: a second connection as the same person replaces the first,
 and closing it drops the original client's delivery. Anything that wants to
 send one line can now do so without evicting the chat app someone is using.
 
+## What is in this repository
+
+| path | what it is |
+|---|---|
+| `mesh/` | **elemesh**, the per-machine mesh daemon (Rust): Bluetooth and Wi-Fi, no infrastructure. Guide: `mesh/README.md` |
+| `client/` | **ele**, the desktop client (Rust, egui) for Linux, macOS and Windows. Uses the local elemesh, or runs its own node |
+| `server.py`, `index.html` | the **server**: accounts, direct messages, groups, images, and the web client it serves |
+| `flutter/` | the Flutter client for the server |
+| `pkg/`, `debian/`, `pkg-client/`, `debian-client/` | packaging |
+| `docs/` | design notes (`docs/MESH.md`) and hand-offs |
+
+`mesh/` and `client/` are one Cargo workspace: `cargo build --release` at the
+top builds both into `target/release/`.
+
 ## Install
 
 Packages are published for Debian/Ubuntu and Arch (AUR). The server is Python
-(FastAPI + uvicorn) over SQLite; the client is a web app, with a Flutter
+(FastAPI + uvicorn) over SQLite; its client is a web app, with a Flutter
 client in `flutter/`.
 
 ## Status, honestly
@@ -120,9 +134,10 @@ client in `flutter/`.
 - **Voice and video: not yet.** Both need a secure context for microphone
   access, so they need a certificate valid on the local network — which the
   text path does not.
-- **Mesh and BLE transports: planned.** The replication protocol is designed
-  to be transport-agnostic so a new bearer does not mean a second
-  implementation.
+- **Mesh over Bluetooth and Wi-Fi: working** between Linux and macOS, with no
+  router, server or internet: links, offline catch-up and relaying verified
+  on hardware. A Mac can find others but cannot yet be found, so two Macs
+  alone need Wi-Fi or a Linux machine between them. See `mesh/README.md`.
 - Sessions are held in memory, so restarting the server signs everyone out.
 - Encrypted ("secret") messages exist, and have not had an external review.
   Do not rely on them for anything that matters.

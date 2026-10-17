@@ -21,3 +21,4 @@ config.json
 # metadata (DEBIAN/control, PKGBUILD) stays tracked.
 pkg-client/usr/
 flutter/build/
+/target

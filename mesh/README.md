@@ -27,11 +27,15 @@ two Macs need a Linux machine (or Wi-Fi) between them for now.
 Needs Rust (`rustup`); on macOS the Command Line Tools are enough, no Xcode.
 On Linux, BlueZ (`bluetoothd`) must be running.
 
+From the top of the repository (mesh and the desktop client share one Cargo
+workspace and one `target/` directory):
+
 ```sh
-cd mesh
-cargo build --release          # binary: target/release/elemesh
-cargo test --release           # optional
+cargo build --release -p elemesh   # binary: target/release/elemesh
+cargo test --release -p elemesh    # optional
 ```
+
+The commands below run from the same place.
 
 ## 2. Install
 
@@ -39,7 +43,7 @@ cargo test --release           # optional
 
 ```sh
 install -Dm755 target/release/elemesh ~/.local/bin/elemesh
-install -Dm644 dist/linux/elemesh.service ~/.config/systemd/user/elemesh.service
+install -Dm644 mesh/dist/linux/elemesh.service ~/.config/systemd/user/elemesh.service
 systemctl --user daemon-reload
 ```
 
@@ -84,7 +88,7 @@ sudo loginctl enable-linger $USER
 **macOS**
 
 ```sh
-sh dist/macos/install.sh target/release/elemesh
+sh mesh/dist/macos/install.sh target/release/elemesh
 ```
 
 The first time, macOS asks whether **ELE Mesh** may use Bluetooth: click
@@ -129,7 +133,7 @@ elemesh status             # this node and its live links
 Rebuild, then:
 
 - **Linux**: `install -Dm755 target/release/elemesh ~/.local/bin/elemesh && systemctl --user restart elemesh`
-- **macOS**: `sh dist/macos/install.sh target/release/elemesh && cp target/release/elemesh ~/.local/bin/`
+- **macOS**: `sh mesh/dist/macos/install.sh target/release/elemesh && cp target/release/elemesh ~/.local/bin/`
   (no new Bluetooth prompt)
 
 ## 8. Troubleshooting

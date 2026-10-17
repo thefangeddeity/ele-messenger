@@ -32,7 +32,3 @@ bluer = { version = "0.17.4", features = ["bluetoothd"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 btleplug = "0.13.5"
 uuid = "1"
-
-[profile.release]
-strip = true
-lto = "thin"

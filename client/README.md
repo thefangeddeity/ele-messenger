@@ -19,9 +19,10 @@ One window, the same on Linux, macOS and Windows (egui).
 
 ## Build and run
 
+From the top of the repository:
+
 ```sh
-cd client
-cargo build --release      # binary: target/release/ele (ele.exe on Windows)
+cargo build --release -p ele-client   # binary: target/release/ele (ele.exe on Windows)
 ./target/release/ele
 ```
 

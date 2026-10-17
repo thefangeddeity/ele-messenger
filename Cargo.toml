@@ -1,0 +1,7 @@
+[workspace]
+members = ["mesh", "client"]
+resolver = "3"
+
+[profile.release]
+strip = true
+lto = "thin"
