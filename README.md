@@ -116,7 +116,7 @@ send one line can now do so without evicting the chat app someone is using.
 | `server.py`, `index.html` | the **server**: accounts, direct messages, groups, images, and the web client it serves |
 | `flutter/` | the Flutter client for the server |
 | `pkg/`, `debian/` | server packaging (the AUR package lives in its own AUR repository) |
-| `docs/` | design notes (`docs/MESH.md`) and hand-offs |
+| `docs/` | how to use it (`docs/USING-ELE.md`), design notes (`docs/MESH.md`) and hand-offs |
 
 `mesh/` and `client/` are one Cargo workspace: `cargo build --release` at the
 top builds both into `target/release/`.
