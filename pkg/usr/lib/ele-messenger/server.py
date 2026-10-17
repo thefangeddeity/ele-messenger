@@ -20,10 +20,23 @@ def load_config():
     except Exception:
         return {}
 
+@contextmanager
 def get_db():
+    """A connection for one `with` block: committed on success, rolled back
+    on error, and always closed.
+
+    sqlite3's own `with conn:` only commits or rolls back; it never closes.
+    Every request used to leave its connection open until garbage collection
+    happened to reach it, and a long-running server ran out of file handles:
+    1,010 open copies of ele.db, then "unable to open database file" on every
+    request, which the web client showed as a login form."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 def hash_pin(pin: str) -> str:
     return bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
