@@ -1,3 +1,17 @@
+ele-messenger (1.4.0-1) resolute; urgency=medium
+
+  * ELE Mesh: elemesh, a per-machine daemon that carries chat between
+    machines over Bluetooth and Wi-Fi with no router, server or internet;
+    store-and-hold, relaying, and catch-up after time apart.
+  * ele: a desktop client (Linux, macOS, Windows) for the mesh. It uses the
+    local elemesh or runs its own node, lists the ELE machines and ELE
+    servers around, and opens a server's page.
+  * A message keeps its timestamp and identity however it arrived, so the
+    same message reaching a node by two paths is stored once.
+  * The packaged web client and server match the source tree again.
+
+ -- thefangeddeity <thefangeddeity@users.noreply.github.com>  Fri, 16 Oct 2026 23:00:00 +0000
+
 ele-messenger (1.3.6-1) resolute; urgency=medium
 
   * Server binds 127.0.0.1 instead of 0.0.0.0: the package installs an nginx

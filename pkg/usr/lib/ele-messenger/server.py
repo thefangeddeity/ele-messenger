@@ -1,4 +1,4 @@
-# ELE Messenger - server.py v1.3.4
+# ELE Messenger - server.py v1.4.0
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response

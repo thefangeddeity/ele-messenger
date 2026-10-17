@@ -115,7 +115,7 @@ send one line can now do so without evicting the chat app someone is using.
 | `client/` | **ele**, the desktop client (Rust, egui) for Linux, macOS and Windows. Uses the local elemesh, or runs its own node |
 | `server.py`, `index.html` | the **server**: accounts, direct messages, groups, images, and the web client it serves |
 | `flutter/` | the Flutter client for the server |
-| `pkg/`, `debian/`, `pkg-client/`, `debian-client/` | packaging |
+| `pkg/`, `debian/` | server packaging (the AUR package lives in its own AUR repository) |
 | `docs/` | design notes (`docs/MESH.md`) and hand-offs |
 
 `mesh/` and `client/` are one Cargo workspace: `cargo build --release` at the
