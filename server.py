@@ -582,15 +582,49 @@ def _fleet_token():
         return None
 
 
+def canonical_ms(ts):
+    """A timestamp as epoch milliseconds, for hashing.
+
+    Identity must not depend on how precisely or in what format a timestamp
+    was written down. This store keeps microseconds; the mesh keeps
+    milliseconds; this fleet has emitted '+00:00', 'Z' and bare naive stamps
+    for the same instant. Hashed as written, one message became several --
+    measured as the same message stored twice the moment it could arrive by
+    two paths.
+
+    Milliseconds because that is the coarsest precision any transport here
+    promises, and identity is only as fine as the least precise carrier.
+
+    Must stay identical to sync-peers' canonical_ms and to the message
+    buffer's: the three compute the id of the same message and have to agree.
+    """
+    if not ts:
+        return None
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        # Integer arithmetic, not timestamp() * 1000: an epoch in milliseconds
+        # needs sixteen significant digits, which is the edge of a float64, so
+        # the multiply can round -- and an id that is sometimes a millisecond
+        # off is an id that sometimes duplicates a message.
+        return int(d.timestamp()) * 1000 + d.microsecond // 1000
+    except Exception:
+        return None
+
+
 def message_id(conversation_id, from_user, timestamp, message, image_id):
-    """Stable across nodes: same message, same id, computed anywhere.
+    """Stable across nodes AND across transports: same message, same id,
+    computed anywhere, however it travelled to get here.
 
     Field separator is \x1f (unit separator) rather than a printable
     character, so a message whose text contains the separator cannot be
     made to collide with a different message by someone choosing their
     words carefully.
     """
-    parts = [conversation_id or "", from_user or "", timestamp or "",
+    ms = canonical_ms(timestamp)
+    when = str(ms) if ms is not None else (timestamp or "")
+    parts = [conversation_id or "", from_user or "", when,
              message or "", image_id or ""]
     return _hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
