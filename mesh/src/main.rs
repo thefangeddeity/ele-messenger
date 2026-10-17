@@ -48,6 +48,11 @@ enum Cmd {
     Tail { room: String },
     /// Show this node and its links
     Status,
+    /// Show or set the name this machine signs messages with when no nick is given
+    Name {
+        /// New name; an empty string goes back to the host name
+        name: Option<String>,
+    },
 }
 async fn http(api: SocketAddr, method: &str, path: &str, body: Option<String>) -> Result<serde_json::Value> {
     let mut s = tokio::net::TcpStream::connect(api).await.with_context(|| format!("daemon not running at {api}"))?;
@@ -120,6 +125,15 @@ async fn main() -> Result<()> {
         }
         Cmd::Status => {
             println!("{}", serde_json::to_string_pretty(&http(cli.api, "GET", "/v1/status", None).await?)?);
+        }
+        Cmd::Name { name } => {
+            let dir = daemon::state_dir(cli.state_dir)?;
+            if let Some(n) = name {
+                daemon::set_name(&dir, &n)?;
+                println!("name: {} (restart elemesh to use it)", daemon::name(&dir));
+            } else {
+                println!("{}", daemon::name(&dir));
+            }
         }
     }
     Ok(())

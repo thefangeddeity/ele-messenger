@@ -61,12 +61,41 @@ pub fn init(dir: &Path, passphrase: &str) -> Result<NodeId> {
     Ok(identity::Identity::load_or_create(dir)?.id)
 }
 
+/// This machine's name for messages sent without a nick: the one set with
+/// `elemesh name`, else the host name without a local domain.
+pub fn name(dir: &Path) -> String {
+    let chosen = std::fs::read_to_string(dir.join("name")).ok().map(|s| s.trim().to_string());
+    let name = chosen.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+        let host = hostname::get().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default();
+        host.split('.').next().unwrap_or_default().to_string()
+    });
+    let mut end = name.len().min(crate::store::MAX_NICK);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    name[..end].to_string()
+}
+
+pub fn set_name(dir: &Path, name: &str) -> Result<()> {
+    let name = name.trim();
+    anyhow::ensure!(name.len() <= crate::store::MAX_NICK, "name up to {} bytes", crate::store::MAX_NICK);
+    let path = dir.join("name");
+    if name.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        std::fs::write(path, name)?;
+    }
+    Ok(())
+}
+
 /// Runs a full node until the local API stops.
 pub async fn run(opts: Options) -> Result<()> {
     let psk = identity::derive_psk(&read_passphrase(&opts.state_dir)?)?;
     let me = identity::Identity::load_or_create(&opts.state_dir)?;
     let store = store::Store::open(&opts.state_dir.join("messages.db"))?;
-    let node = Arc::new(Node::new(me, psk, store));
+    let mut node = Node::new(me, psk, store);
+    node.name = name(&opts.state_dir);
+    let node = Arc::new(node);
     tracing::info!("node {} state {}", node.id_hex(), opts.state_dir.display());
     let n = node.clone();
     tokio::spawn(async move { n.maintenance().await });

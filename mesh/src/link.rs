@@ -268,6 +268,15 @@ mod tests {
         assert!(a.links().is_empty() && b.links().is_empty());
     }
 
+    #[test]
+    fn a_message_without_a_nick_carries_the_machine_name() {
+        let mut n = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
+        n.name = "kitchen".into();
+        assert_eq!(n.post("home", "", "hi", None).unwrap().nick, "kitchen");
+        assert_eq!(n.post("home", "  ", "hi", None).unwrap().nick, "kitchen");
+        assert_eq!(n.post("home", "alex", "hi", None).unwrap().nick, "alex");
+    }
+
     #[tokio::test]
     async fn a_scout_sees_nodes_but_never_links() {
         let a = node("our household");

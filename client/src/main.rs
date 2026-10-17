@@ -246,7 +246,7 @@ impl eframe::App for App {
                 ui.label(egui::RichText::new(chip).weak()).on_hover_text(tip);
                 if let Some(st) = &status {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("this machine {}", short(&st.node))).weak().monospace());
+                        ui.label(egui::RichText::new(if st.name.is_empty() { format!("this machine {}", short(&st.node)) } else { format!("this machine: {} ({})", st.name, short(&st.node)) }).weak().monospace());
                     });
                 }
             });
@@ -387,7 +387,10 @@ impl App {
             }
             ui.separator();
             ui.label("Name");
-            ui.add(egui::TextEdit::singleline(&mut self.nick).hint_text("shown to others").desired_width(120.0));
+            let default = self.status.lock().unwrap().as_ref().map(|s| s.name.clone()).filter(|n| !n.is_empty());
+            let hint = default.unwrap_or_else(|| "shown to others".into());
+            ui.add(egui::TextEdit::singleline(&mut self.nick).hint_text(hint).desired_width(120.0))
+                .on_hover_text("Left empty, your messages carry this machine's name");
         });
         ui.separator();
 

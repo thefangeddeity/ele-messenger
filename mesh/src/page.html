@@ -85,6 +85,7 @@ async function status() {
   try {
     const s = await (await fetch("/v1/status")).json();
     me = s.node;
+    $("nick").placeholder = s.name || "";
     const el = $("links");
     el.className = s.links.length ? "" : "none";
     el.textContent = s.links.length

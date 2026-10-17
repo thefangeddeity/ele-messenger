@@ -71,6 +71,10 @@ pub struct Node {
     pub changed: Notify,
     /// Without the passphrase: listen and report who is around, never link.
     pub scout: bool,
+    /// What this machine is called in messages sent without a nick. It only
+    /// travels inside messages, over encrypted links, never in a beacon or
+    /// advertisement.
+    pub name: String,
     nearby: Mutex<HashMap<String, Heard>>,
 }
 
@@ -92,6 +96,7 @@ impl Node {
             dials: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             scout: false,
+            name: String::new(),
             nearby: Mutex::new(HashMap::new()),
         }
     }
@@ -292,6 +297,7 @@ impl Node {
 
     pub fn post(&self, room: &str, nick: &str, text: &str, said_at: Option<u64>) -> Result<Entry> {
         let room = room.trim();
+        let nick = if nick.trim().is_empty() { self.name.as_str() } else { nick };
         if room.is_empty() || room.len() > MAX_ROOM || nick.len() > MAX_NICK || text.len() > MAX_TEXT || text.is_empty() {
             bail!("room 1-{MAX_ROOM} bytes, nick up to {MAX_NICK}, text 1-{MAX_TEXT}");
         }

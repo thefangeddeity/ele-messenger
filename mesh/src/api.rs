@@ -80,6 +80,7 @@ async fn status(State(node): State<Arc<Node>>) -> Response {
     let entries = node.with_store(|s| s.count()).unwrap_or(0);
     Json(json!({
         "node": node.id_hex(),
+        "name": node.name,
         "joined": !node.scout,
         "entries": entries,
         "links": node.links(),

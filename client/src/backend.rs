@@ -27,6 +27,8 @@ pub enum Mode {
 pub struct Status {
     pub node: String,
     #[serde(default)]
+    pub name: String,
+    #[serde(default)]
     pub links: Vec<Link>,
     #[serde(default)]
     pub nearby: Vec<Nearby>,
