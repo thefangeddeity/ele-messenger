@@ -457,9 +457,24 @@ async function ensureSharedKey(contact) {
   }
 }
 
+// Why this page can't do a secret chat right now, or null if it can.
+// Browsers only offer encryption on https:// pages or this computer's own
+// address, and the keys are protected by a PIN, which a machine session
+// doesn't have.
+function secretUnavailableReason() {
+  if (!window.isSecureContext || !(window.crypto && crypto.subtle))
+    return 'Secret chats need a secure page: open the messenger over https:// or on the server computer itself.';
+  if (!myKeyPair)
+    return 'Secret chats need you signed in with your own name and PIN.';
+  return null;
+}
+
+// Returns the ciphertext, or null when it can't encrypt. It never hands back
+// the plaintext: a secret chat that quietly sends readable text is worse than
+// one that refuses.
 async function encryptMsg(contact, plaintext) {
   const key = await ensureSharedKey(contact);
-  if (!key) return plaintext;
+  if (!key) return null;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     {name: 'AES-GCM', iv}, key, new TextEncoder().encode(plaintext)
@@ -889,8 +904,14 @@ async function send(imageId) {
   if (!activeContact || (!msg && !imageId) || !ws) return;
   let payload = msg;
   const isSecret = secretChats.has(activeContact);
-  if (msg && isSecret && myKeyPair) {
-    payload = await encryptMsg(activeContact, msg);
+  if (msg && isSecret) {
+    const why = secretUnavailableReason();
+    if (why) { alert(why + ' Nothing was sent.'); return; }
+    try { payload = await encryptMsg(activeContact, msg); } catch { payload = null; }
+    if (!payload) {
+      alert('Could not encrypt for ' + activeContact + ' (they may not have signed in with a PIN on this server yet). Nothing was sent.');
+      return;
+    }
   }
   if (isGroupCid(activeContact)) {
     ws.send(JSON.stringify({conversation_id: activeContact, message: msg, image_id: imageId || null}));
@@ -1243,6 +1264,10 @@ async function toggleSecretChat() {
   if (isGroupCid(activeContact)) return;
   const isSecret = secretChats.has(activeContact);
   const newSecret = !isSecret;
+  if (newSecret) {
+    const why = secretUnavailableReason();
+    if (why) { alert(why); return; }
+  }
   try {
     await fetch('/ele-api/api/secret/' + activeContact + '?token=' + token, {
       method: 'POST',
@@ -1278,7 +1303,7 @@ function openSettings() {
 }
 function openAbout() {
   document.getElementById('hamburger-menu').classList.remove('open');
-  document.getElementById('about-version').textContent = 'v1.4.2';
+  document.getElementById('about-version').textContent = 'v1.4.3';
   document.getElementById('about-server').textContent = 'Server: ' + location.hostname + ' · ' + (document.getElementById('transport-label').textContent || 'Unknown');
   document.getElementById('about-overlay').classList.add('open');
 }
@@ -1291,7 +1316,7 @@ function updateStatusbar() {
   updateTransportUI();
 }
 function pollOnline() {
-  fetch('/ele-api/online').then(r => r.json()).then(d => {
+  fetch('/ele-api/online?token=' + encodeURIComponent(token || '')).then(r => r.json()).then(d => {
     onlineUsers = new Set((d.online || []).filter(u => u !== me));
     updateSidebar();
     updateStatusbar();

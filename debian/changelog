@@ -1,3 +1,27 @@
+ele-messenger (1.4.3-1) resolute; urgency=high
+
+  * Security fixes from a source review, each with a regression test in
+    tests/server_test.py:
+    - No default admin account with PIN 1234; one still holding the
+      default is removed at startup.
+    - Group messages sent over the websocket check membership, the same
+      shared check as the HTTP path.
+    - Machine sessions judge the real caller (X-Real-IP from nginx, trusted
+      only from this machine) instead of treating every proxied caller as
+      local.
+    - Closing an older websocket no longer takes the user's newer one
+      offline.
+    - Server settings can be changed only by a program on the server
+      itself, and only known settings.
+    - Who is online and the connection log are for signed-in callers;
+      /online still answers for reachability checks.
+    - The fleet sync token is accepted in an X-Fleet-Token header, so it
+      stays out of access logs.
+  * Web client: secret chats refuse to send instead of sending readable
+    text when the page can't encrypt (plain http, no PIN, no peer key).
+
+ -- thefangeddeity <thefangeddeity@users.noreply.github.com>  Tue, 20 Oct 2026 06:00:00 +0000
+
 ele-messenger (1.4.2-1) resolute; urgency=medium
 
   * One name on every system. The app and mesh service that every machine

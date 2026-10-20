@@ -15,10 +15,14 @@ location /ele-ws/ {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    # The real caller, for server.py's local-network-only checks.
+    proxy_set_header X-Real-IP $remote_addr;
     proxy_read_timeout 86400;
 }
 
 location /ele-api/ {
     proxy_pass http://127.0.0.1:8000/;
     proxy_set_header Host $host;
+    # The real caller, for server.py's local-network-only checks.
+    proxy_set_header X-Real-IP $remote_addr;
 }

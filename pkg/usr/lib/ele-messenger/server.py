@@ -1,4 +1,4 @@
-# ELE Messenger - server.py v1.4.2
+# ELE Messenger - server.py v1.4.3
 import json, os, secrets, asyncio, uuid, sqlite3, base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import Response
@@ -197,14 +197,12 @@ def init_db():
         if "origin_node" not in msg_cols:
             conn.execute("ALTER TABLE messages ADD COLUMN origin_node TEXT")
 
-        # Default admin account
-        count = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-        if count == 0:
-            hashed_pin = hash_pin("1234")
-            conn.execute(
-                "INSERT INTO accounts (username, pin) VALUES (?, ?)",
-                ("admin", hashed_pin)
-            )
+        # Earlier versions seeded an "admin" account with PIN 1234 on an empty
+        # database. Anyone who knew the default could sign in as it, so it is
+        # no longer created, and one still holding the default is removed.
+        row = conn.execute("SELECT pin FROM accounts WHERE username = 'admin'").fetchone()
+        if row and verify_pin("1234", row["pin"]):
+            conn.execute("DELETE FROM accounts WHERE username = 'admin'")
         conn.commit()
 
 app = FastAPI()
@@ -240,7 +238,6 @@ async def register(data: dict):
             raise HTTPException(409, "username taken")
         hashed_pin = hash_pin(pin)
         conn.execute("INSERT INTO accounts (username, pin) VALUES (?, ?)", (username, hashed_pin))
-        conn.execute("DELETE FROM accounts WHERE username = ?", ("admin",))
         conn.commit()
     return {"status": "ok"}
 
@@ -275,8 +272,19 @@ async def login(data: dict):
 async def get_config():
     return load_config()
 
+CONFIG_KEYS = {"host", "port", "server_name", "tailscale_ip", "lan_ip"}
+
+
 @app.post("/api/config")
-async def set_config(data: dict):
+async def set_config(data: dict, request: Request):
+    # Changing the server's settings is the machine's own business: only a
+    # program on this machine talking to it directly (not through nginx)
+    # may, and only known settings. It used to accept any JSON from anyone.
+    if not _peer_is_loopback(request) or request.headers.get("x-real-ip"):
+        raise HTTPException(403, "settings can only be changed on the server itself")
+    unknown = set(data) - CONFIG_KEYS
+    if unknown:
+        raise HTTPException(400, "unknown settings: " + ", ".join(sorted(unknown)))
     cfg = load_config()
     cfg.update(data)
     with open(CONFIG_PATH, "w") as f:
@@ -292,11 +300,18 @@ async def get_accounts(token: str = None):
     return {"accounts": [r["username"] for r in rows]}
 
 @app.get("/online")
-async def online_users():
+async def online_users(token: str = None):
+    # Answers 200 to anyone, because the camera viewer, the home page and
+    # sync-peers use it to ask "is the messenger here?". Who is online is
+    # for signed-in callers only.
+    if not token or token not in sessions:
+        return {"online": []}
     return {"online": list(connected_clients.keys())}
 
 @app.get("/api/log")
-async def get_log():
+async def get_log(token: str = None):
+    if not token or token not in sessions:
+        raise HTTPException(401, "invalid token")
     return {"log": connect_log[-50:]}
 
 @app.post("/api/upload")
@@ -491,6 +506,27 @@ def _join_house(conn, username):
         "VALUES (?, ?)", (HOUSE, username))
 
 
+def _members_for_send(conn, cid, username):
+    """Who receives a message `username` sends into conversation `cid`.
+
+    The one place that decides whether someone may post into a
+    conversation, used by both HTTP and websocket sends -- the websocket path
+    once skipped the check, so anyone who learned a group's id could post
+    into it. Raises LookupError for an unknown conversation and
+    PermissionError for a non-member. The house channel is open: speaking
+    into it is how you join it."""
+    if cid == HOUSE:
+        _join_house(conn, username)
+    if not conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone():
+        raise LookupError(cid)
+    members = [m["username"] for m in conn.execute(
+        "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
+    ).fetchall()]
+    if username not in members:
+        raise PermissionError(cid)
+    return members
+
+
 @app.post("/api/send")
 async def send_message(data: dict, token: str = None):
     token = token or data.get("token")
@@ -510,20 +546,11 @@ async def send_message(data: dict, token: str = None):
 
     with get_db() as conn:
         if cid:
-            if cid == HOUSE:
-                _join_house(conn, username)
-            row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
-            if not row:
+            try:
+                members = _members_for_send(conn, cid, username)
+            except LookupError:
                 raise HTTPException(404, "conversation not found")
-            member_rows = conn.execute(
-                "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid,)
-            ).fetchall()
-            members = [m["username"] for m in member_rows]
-            if cid == HOUSE and username not in members:
-                # Open channel: speaking into it is how you join it.
-                _join_house(conn, username)
-                members = members + [username]
-            elif username not in members:
+            except PermissionError:
                 raise HTTPException(403, "not a member")
         elif target:
             cid = convo_id(username, target)
@@ -659,8 +686,28 @@ def message_id(conversation_id, from_user, timestamp, message, image_id):
 _PRIVATE_PREFIXES = ("127.", "10.", "192.168.", "169.254.")
 
 
-def _is_local_caller(request):
+def _peer_is_loopback(request):
     host = (request.client.host if request and request.client else "") or ""
+    return host.startswith("127.") or host in ("::1", "localhost")
+
+
+def _caller_ip(request):
+    """The address of whoever is really calling.
+
+    Behind the packaged nginx every request arrives from 127.0.0.1, which
+    made every caller look local. nginx passes the real address in X-Real-IP;
+    that header is believed only when the connection itself comes from this
+    machine, so a remote caller can't send it to pose as local."""
+    host = (request.client.host if request and request.client else "") or ""
+    if _peer_is_loopback(request):
+        real = (request.headers.get("x-real-ip") or "").strip()
+        if real:
+            return real
+    return host
+
+
+def _is_local_caller(request):
+    host = _caller_ip(request)
     if host in ("::1", "localhost"):
         return True
     if host.startswith(_PRIVATE_PREFIXES):
@@ -704,11 +751,15 @@ async def node_login(request: Request = None):
 
 
 @app.get("/api/sync/export")
-async def sync_export(token: str = None, days: int = 30):
+async def sync_export(request: Request, token: str = None, days: int = 30):
     ft = _fleet_token()
     if not ft:
         raise HTTPException(503, "fleet sync not configured on this node")
-    if token != ft:
+    # Prefer the X-Fleet-Token header: a token in the query string is written
+    # into every access log. The query form still works so existing peers
+    # keep syncing until they switch.
+    token = request.headers.get("x-fleet-token") or token
+    if not token or not secrets.compare_digest(token, ft):
         raise HTTPException(401, "invalid fleet token")
     days = max(1, min(int(days), 365))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -867,17 +918,18 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 # Group (or explicit cid) message — fan out to all members
                 ts = datetime.now(timezone.utc).isoformat()
                 with get_db() as conn:
-                    row = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid_direct,)).fetchone()
-                    if not row:
+                    try:
+                        member_list = _members_for_send(conn, cid_direct, username)
+                    except LookupError:
                         await websocket.send_json({"from": "server", "message": "conversation not found"})
                         continue
-                    member_rows = conn.execute(
-                        "SELECT username FROM conversation_members WHERE conversation_id = ?", (cid_direct,)
-                    ).fetchall()
-                    member_list = [m["username"] for m in member_rows]
+                    except PermissionError:
+                        await websocket.send_json({"from": "server", "message": "not a member of that conversation"})
+                        continue
                     conn.execute(
-                        "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) VALUES (?, ?, ?, ?, ?, ?)",
-                        (cid_direct, username, message, image_id, ts, secret)
+                        "INSERT INTO messages (conversation_id, from_user, message, image_id, "
+                        "timestamp, secret, origin_node) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (cid_direct, username, message, image_id, ts, secret, _this_node())
                     )
                     conn.commit()
                 payload = {"from": username, "message": message, "image_id": image_id, "secret": bool(secret), "conversation_id": cid_direct}
@@ -909,8 +961,9 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                         (cid, target)
                     )
                     conn.execute(
-                        "INSERT INTO messages (conversation_id, from_user, message, image_id, timestamp, secret) VALUES (?, ?, ?, ?, ?, ?)",
-                        (cid, username, message, image_id, ts, secret)
+                        "INSERT INTO messages (conversation_id, from_user, message, image_id, "
+                        "timestamp, secret, origin_node) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (cid, username, message, image_id, ts, secret, _this_node())
                     )
                     conn.commit()
                 if target in connected_clients:
@@ -924,5 +977,11 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 else:
                     await websocket.send_json({"from": "server", "message": f"{target} is not online."})
     except WebSocketDisconnect:
-        del connected_clients[username]
+        pass
+    finally:
+        # Only if it is still this socket: a newer connection for the same
+        # user replaces the entry, and closing the old one must not take the
+        # new one offline.
+        if connected_clients.get(username) is websocket:
+            del connected_clients[username]
         connect_log.append({"time": datetime.now(timezone.utc).isoformat(), "event": f"{username} disconnected"})

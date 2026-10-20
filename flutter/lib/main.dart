@@ -295,7 +295,7 @@ class _ChatShellState extends State<ChatShell> {
 
   Future<void> _loadOnline() async {
     try {
-      final res = await http.get(Uri.parse('$kApiBase/online'));
+      final res = await http.get(Uri.parse('$kApiBase/online?token=${widget.token}'));
       if (res.statusCode == 200) {
         final online = Set<String>.from(jsonDecode(res.body)['online']);
         setState(() { _online = online; _onlineCount = online.where((u) => u != widget.username).length; });
