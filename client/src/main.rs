@@ -23,7 +23,7 @@ fn main() -> eframe::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "elemesh=info,ele=info".into()))
         .init();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("ELE").with_inner_size([920.0, 620.0]).with_min_inner_size([560.0, 380.0]),
+        viewport: egui::ViewportBuilder::default().with_title("ELE Messenger").with_inner_size([920.0, 620.0]).with_min_inner_size([560.0, 380.0]),
         ..Default::default()
     };
     eframe::run_native("ELE", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))

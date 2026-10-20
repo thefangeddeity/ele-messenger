@@ -14,16 +14,17 @@ internet, the router or the power is out.
 
 ## Getting started (once on each computer)
 
-1. Install ELE. On Linux it is the `elemesh` package; Windows and Mac
-   installers are coming, so for now ask whoever looks after your computers.
-2. Open the **ELE** app.
+1. Install ELE Messenger. On Linux it is the `ele-messenger` package;
+   Windows and Mac installers are coming, so for now ask whoever looks
+   after your computers.
+2. Open the **ELE Messenger** app.
 3. It lists the ELE computers it can hear. Type the mesh passphrase and click
    **Join**. Every computer uses the same passphrase. Anyone who has it can
    read your messages, so keep it private.
 
 ## Everyday use
 
-- Open the ELE app, or open **http://127.0.0.1:8740** in a web browser on
+- Open the ELE Messenger app, or open **http://127.0.0.1:8740** in a web browser on
   that computer.
 - Pick a **Room**. Everyone in the same room sees the same messages; "home"
   is the usual one.

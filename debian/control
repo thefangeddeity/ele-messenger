@@ -4,10 +4,16 @@ Priority: optional
 Maintainer: thefangeddeity <thefangeddeity@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13)
 
-Package: ele-messenger
+Package: ele-messenger-server
 Architecture: all
 Depends: python3, python3-fastapi, uvicorn, python3-websockets, python3-aiosqlite, python3-bcrypt, nginx, avahi-daemon
 Recommends: tailscale
-Description: Resilience-first household chat platform
- Degrades gracefully from LAN to BLE when infrastructure fails.
- MSN Messenger-inspired UI. PIN-based auth. SQLite message history.
+# Until 1.4.2 the server package was called ele-messenger; that name now
+# belongs to the app every machine installs.
+Replaces: ele-messenger (<< 1.4.2-1)
+Breaks: ele-messenger (<< 1.4.2-1)
+Description: ELE Messenger server: accounts, direct messages, groups and images
+ The fuller ELE Messenger for a household network: PIN accounts, direct
+ messages, groups, images and a web client, over the LAN and tailnet. The
+ ELE Mesh (the ele-messenger package) keeps working when this server or the
+ network is down.

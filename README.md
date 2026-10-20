@@ -123,9 +123,17 @@ top builds both into `target/release/`.
 
 ## Install
 
-Packages are published for Debian/Ubuntu and Arch (AUR). The server is Python
-(FastAPI + uvicorn) over SQLite; its client is a web app, with a Flutter
-client in `flutter/`.
+One name on every system: **ELE Messenger**.
+
+| package | what it installs | where |
+|---|---|---|
+| `ele-messenger` | the desktop app (`ele`) and the mesh service (`elemesh`); every machine | Arch (AUR) |
+| `ele-messenger-server` | the server: accounts, direct messages, groups, images, web client | Arch (AUR), Debian/Ubuntu |
+
+Windows and macOS installers for `ele-messenger` are next. The server is
+Python (FastAPI + uvicorn) over SQLite and runs on Linux; its client is a
+web app, with a Flutter client in `flutter/`. Until 1.4.2 the server package
+was called `ele-messenger` and the app `elemesh`.
 
 ## Status, honestly
 

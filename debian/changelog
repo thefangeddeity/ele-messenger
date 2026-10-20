@@ -1,3 +1,12 @@
+ele-messenger (1.4.2-1) resolute; urgency=medium
+
+  * One name on every system. The app and mesh service that every machine
+    installs is now the ele-messenger package; the server package is now
+    ele-messenger-server (it replaces the old ele-messenger).
+  * The desktop app's window is titled "ELE Messenger".
+
+ -- thefangeddeity <thefangeddeity@users.noreply.github.com>  Mon, 19 Oct 2026 12:00:00 +0000
+
 ele-messenger (1.4.1-1) resolute; urgency=medium
 
   * Server: every database connection is closed. A long-running server
