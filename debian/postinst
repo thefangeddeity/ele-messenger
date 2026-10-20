@@ -8,40 +8,27 @@ adduser --system --no-create-home --group ele-messenger 2>/dev/null || true
 mkdir -p /var/lib/ele-messenger
 chown ele-messenger:ele-messenger /var/lib/ele-messenger
 
-# nginx integration
-SNIPPET="    include /etc/nginx/sites-available/ele-messenger;"
-INJECTED=0
-
-if [ -d /etc/nginx/sites-enabled ]; then
-    for f in /etc/nginx/sites-enabled/*; do
-        [ -f "$f" ] || continue
-        if grep -q 'listen 80' "$f" && ! grep -qF "$SNIPPET" "$f"; then
-            # Insert include before last closing brace
-            sed -i "$(grep -n '^}' "$f" | tail -1 | cut -d: -f1)i\\$SNIPPET" "$f"
-            INJECTED=1
-            echo "==> Injected ELE nginx snippet into $f"
-            break
-        fi
-    done
-fi
-
-if [ "$INJECTED" = "0" ]; then
-    if ! grep -qF "$SNIPPET" /etc/nginx/sites-enabled/* 2>/dev/null; then
-        cat > /etc/nginx/sites-available/ele-messenger-standalone << 'EOF'
+# nginx: only when nothing serves the messenger yet, give it a block of its
+# own on port 80. Other sites' files are never edited, and running this
+# again (any upgrade) changes nothing.
+if ! grep -rqsE 'ele-messenger(\.conf)?;|location /ele-api/' \
+        /etc/nginx/nginx.conf /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null; then
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    cat > /etc/nginx/sites-available/ele-messenger-standalone << 'NGEOF'
 server {
     listen 80;
     include /etc/nginx/sites-available/ele-messenger;
 }
-EOF
-        ln -sf /etc/nginx/sites-available/ele-messenger-standalone \
-            /etc/nginx/sites-enabled/ele-messenger-standalone
-        echo "==> Created standalone nginx block on port 80"
-    fi
+NGEOF
+    ln -sf /etc/nginx/sites-available/ele-messenger-standalone \
+        /etc/nginx/sites-enabled/ele-messenger-standalone
+    echo "==> Serving ELE Messenger on port 80 (nginx: sites-enabled/ele-messenger-standalone)."
 fi
 
-nginx -t && systemctl reload nginx || echo "==> nginx reload failed — check config"
+nginx -t && systemctl reload nginx || echo "==> nginx reload failed; check its config"
 
 # Enable and start service
 systemctl daemon-reload
-systemctl enable --now ele-messenger
-echo "==> ELE Messenger started."
+systemctl enable ele-messenger
+systemctl restart ele-messenger
+echo "==> ELE Messenger server started."
