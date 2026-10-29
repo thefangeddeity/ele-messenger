@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use crate::identity::{Identity, derive_psk};
     use crate::node::now_ms;
-    use crate::store::Store;
+    use crate::store::{Control, Entry, Store};
 
     fn node(pass: &str) -> Arc<Node> {
         Arc::new(Node::new(Identity::generate().unwrap(), derive_psk(pass).unwrap(), Store::in_memory().unwrap()))
@@ -271,8 +271,8 @@ mod tests {
     #[tokio::test]
     async fn linked_nodes_learn_each_others_names() {
         let named = |n: &str| {
-            let mut node = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
-            node.name = n.into();
+            let node = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
+            node.set_name(n.into());
             Arc::new(node)
         };
         let (a, b) = (named("kitchen"), named("attic"));
@@ -283,10 +283,68 @@ mod tests {
         assert!(settle(|| name(&a).as_deref() == Some("attic") && name(&b).as_deref() == Some("kitchen")).await);
     }
 
+    /// Texts of the room's visible messages, controls left out.
+    fn shown(n: &Node, room: &str) -> Vec<String> {
+        n.with_store(|s| s.messages(room, 0, 500))
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.control.is_none())
+            .map(|m| m.text)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn deletes_and_clears_reach_every_node() {
+        let (a, b) = (node("same passphrase"), node("same passphrase"));
+        let (sa, sb) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(run(sa, true, "test", "pipe".into(), a.clone()));
+        tokio::spawn(run(sb, false, "test", "pipe".into(), b.clone()));
+        let first = a.post("home", "a", "oops", None).unwrap();
+        b.post("home", "b", "from b", None).unwrap();
+        assert!(settle(|| shown(&a, "home").len() == 2 && shown(&b, "home").len() == 2).await);
+
+        // Delete your own message: gone everywhere.
+        a.delete_own("home", first.seq).unwrap();
+        assert!(settle(|| shown(&b, "home") == ["from b"]).await, "b still shows {:?}", shown(&b, "home"));
+        assert_eq!(shown(&a, "home"), ["from b"]);
+
+        // Clear for everyone: earlier messages hidden everywhere, later ones show.
+        b.clear("home", true).unwrap();
+        assert!(settle(|| shown(&a, "home").is_empty()).await, "a still shows {:?}", shown(&a, "home"));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        a.post("home", "a", "after the clear", None).unwrap();
+        assert!(settle(|| shown(&b, "home") == ["after the clear"]).await);
+    }
+
+    #[test]
+    fn a_node_cannot_delete_someone_elses_message_and_clear_for_me_stays_here() {
+        let a = node("same passphrase");
+        let s = Store::in_memory().unwrap();
+        let theirs = Entry { author: [9; 8], seq: 1, ts_ms: 1, room: "home".into(), nick: "x".into(), text: "keep me".into() };
+        s.insert(&theirs, 1).unwrap();
+        // A delete aimed at another author's message is ignored.
+        let forged = Entry {
+            author: a.identity.id,
+            seq: 1,
+            ts_ms: 2,
+            room: "home".into(),
+            nick: "".into(),
+            text: Control::Delete { author: hex::encode([9u8; 8]), seq: 1 }.text(),
+        };
+        s.insert(&forged, 2).unwrap();
+        assert!(s.messages("home", 0, 10).unwrap().iter().any(|m| m.text == "keep me"));
+
+        a.post("home", "a", "mine", None).unwrap();
+        a.clear("home", false).unwrap();
+        assert!(shown(&a, "home").is_empty());
+        // Clearing only here sends nothing: no control entry was written.
+        assert!(a.with_store(|s| s.messages("home", 0, 10)).unwrap().iter().all(|m| m.control.is_none()));
+    }
+
     #[test]
     fn a_message_without_a_nick_carries_the_machine_name() {
-        let mut n = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
-        n.name = "kitchen".into();
+        let n = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
+        n.set_name("kitchen".into());
         assert_eq!(n.post("home", "", "hi", None).unwrap().nick, "kitchen");
         assert_eq!(n.post("home", "  ", "hi", None).unwrap().nick, "kitchen");
         assert_eq!(n.post("home", "alex", "hi", None).unwrap().nick, "alex");

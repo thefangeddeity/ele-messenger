@@ -9,6 +9,31 @@ pub const MAX_TEXT: usize = 2048;
 pub const MAX_ROOM: usize = 64;
 pub const MAX_NICK: usize = 64;
 
+/// A control entry's text starts with this. It travels like any message, so
+/// deletes and clears reach every node by the same sync and relaying; nodes
+/// that predate it show it as odd text until they update.
+pub const CONTROL_PREFIX: &str = "\u{1}ele:";
+
+/// What a control entry asks for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Control {
+    /// Remove one message. Honoured only when the control's author wrote it.
+    Delete { author: String, seq: u64 },
+    /// Hide everything in the room up to and including this entry's time.
+    Clear,
+}
+
+impl Control {
+    pub fn text(&self) -> String {
+        format!("{CONTROL_PREFIX}{}", serde_json::to_string(self).unwrap_or_default())
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        serde_json::from_str(text.strip_prefix(CONTROL_PREFIX)?).ok()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub author: NodeId,
@@ -38,6 +63,9 @@ pub struct StoredEntry {
     pub room: String,
     pub nick: String,
     pub text: String,
+    /// Set on control entries, which clients apply rather than show.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<Control>,
 }
 
 pub struct Store {
@@ -70,6 +98,19 @@ impl Store {
              CREATE TABLE IF NOT EXISTS bases (
                  author BLOB PRIMARY KEY,
                  base INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS deleted (
+                 author BLOB NOT NULL,
+                 seq INTEGER NOT NULL,
+                 PRIMARY KEY (author, seq)
+             );
+             CREATE TABLE IF NOT EXISTS cleared (
+                 room TEXT PRIMARY KEY,
+                 before_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS cleared_here (
+                 room TEXT PRIMARY KEY,
+                 before_ms INTEGER NOT NULL
              );",
         )?;
         Ok(Self { conn })
@@ -85,7 +126,42 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![&e.author[..], e.seq as i64, e.ts_ms as i64, e.room, e.nick, e.text, received_ms as i64],
         )?;
+        if n == 1 {
+            self.apply(e)?;
+        }
         Ok(n == 1)
+    }
+
+    /// Records what a control entry asks for. Order doesn't matter: a delete
+    /// that arrives before its message still hides it when it comes.
+    fn apply(&self, e: &Entry) -> Result<()> {
+        match Control::parse(&e.text) {
+            Some(Control::Delete { author, seq }) if author == hex::encode(e.author) => {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO deleted (author, seq) VALUES (?1, ?2)",
+                    params![&e.author[..], seq as i64],
+                )?;
+            }
+            Some(Control::Clear) => self.raise_clear("cleared", &e.room, e.ts_ms)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn raise_clear(&self, table: &str, room: &str, before_ms: u64) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO {table} (room, before_ms) VALUES (?1, ?2)
+                 ON CONFLICT(room) DO UPDATE SET before_ms = MAX(before_ms, excluded.before_ms)"
+            ),
+            params![room, before_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Hides the room's messages up to `before_ms` on this node only.
+    pub fn clear_here(&self, room: &str, before_ms: u64) -> Result<()> {
+        self.raise_clear("cleared_here", room, before_ms)
     }
 
     pub fn next_seq(&self, author: &NodeId) -> Result<u64> {
@@ -188,13 +264,22 @@ impl Store {
         Ok(out)
     }
 
+    /// Messages after `after`, minus deleted and cleared ones. Control
+    /// entries are included so a client following the room can apply them.
     pub fn messages(&self, room: &str, after: i64, limit: u32) -> Result<Vec<StoredEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT rowid, author, seq, ts_ms, room, nick, text FROM entries
-             WHERE room = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3",
+            "SELECT e.rowid, e.author, e.seq, e.ts_ms, e.room, e.nick, e.text FROM entries e
+             WHERE e.room = ?1 AND e.rowid > ?2
+               AND NOT EXISTS (SELECT 1 FROM deleted d WHERE d.author = e.author AND d.seq = e.seq)
+               AND (instr(e.text, ?4) = 1 OR NOT EXISTS (
+                     SELECT 1 FROM cleared c WHERE c.room = e.room AND e.ts_ms <= c.before_ms
+                     UNION ALL
+                     SELECT 1 FROM cleared_here h WHERE h.room = e.room AND e.ts_ms <= h.before_ms))
+             ORDER BY e.rowid LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![room, after, limit], |r| {
+        let rows = stmt.query_map(params![room, after, limit, CONTROL_PREFIX], |r| {
             let a: Vec<u8> = r.get(1)?;
+            let text: String = r.get(6)?;
             Ok(StoredEntry {
                 cursor: r.get(0)?,
                 author: hex::encode(a),
@@ -202,7 +287,8 @@ impl Store {
                 ts_ms: r.get::<_, i64>(3)? as u64,
                 room: r.get(4)?,
                 nick: r.get(5)?,
-                text: r.get(6)?,
+                control: Control::parse(&text),
+                text,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)

@@ -68,6 +68,13 @@ body { font-family: var(--mono); font-size: 14px; background: var(--bg); color: 
 #new-chat-btn:hover { background: linear-gradient(to bottom, var(--border-strong), var(--panel-2)); }
 #about-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 200; align-items: center; justify-content: center; }
 #about-overlay.open { display: flex; }
+#settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 200; align-items: center; justify-content: center; }
+#settings-overlay.open { display: flex; }
+#settings-box { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 20px 22px; width: 340px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 6px; }
+#settings-box h3 { font-size: 15px; margin-bottom: 4px; }
+#settings-box h4 { font-size: 12px; margin-top: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+#settings-box .note { font-size: 12px; color: var(--text-dim); }
+#settings-box button { align-self: flex-start; }
 #about-box { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 24px; width: 260px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
 #about-title { font-size: 18px; font-weight: bold; color: var(--text); }
 #about-version { font-size: 13px; color: var(--text-muted); }
@@ -292,6 +299,21 @@ var(--text-dim)ount-list { overflow-y: auto; flex: 1; }
     <div id="about-server"></div>
     <div id="about-license">GPL 3.0</div>
     <button id="about-close" onclick="closeAbout()">Close</button>
+  </div>
+</div>
+<div id="settings-overlay">
+  <div id="settings-box">
+    <h3>Settings</h3>
+    <h4>You</h4>
+    <div id="set-who"></div>
+    <div class="note" id="set-who-note"></div>
+    <h4>Appearance</h4>
+    <button id="set-theme" onclick="toggleTheme()"></button>
+    <h4>Secret chats</h4>
+    <div class="note" id="set-secret"></div>
+    <h4>This server</h4>
+    <div class="note" id="set-server"></div>
+    <button onclick="closeSettings()" style="margin-top:12px">Close</button>
   </div>
 </div>
 <div id="modal-overlay">
@@ -1299,7 +1321,30 @@ async function deleteChat() {
 }
 function openSettings() {
   document.getElementById('hamburger-menu').classList.remove('open');
-  alert('Settings coming soon.');
+  const node = (typeof myPin === 'undefined' || !myPin);
+  document.getElementById('set-who').textContent = 'Signed in as ' + me;
+  document.getElementById('set-who-note').textContent = node
+    ? 'This is the machine itself, not a person. Sign out and sign in with your own name and PIN to write as yourself.'
+    : 'Your own account on this server.';
+  document.getElementById('set-secret').textContent = secretUnavailableReason() || 'Available on this page.';
+  document.getElementById('set-server').textContent = location.host + ' \u00b7 ' + (document.getElementById('transport-label').textContent || 'connected');
+  themeButtonLabel();
+  document.getElementById('settings-overlay').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('open');
+}
+// The suite's light/dark switch, shared with the camera viewer and the home page.
+function themeButtonLabel() {
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  document.getElementById('set-theme').textContent = light ? 'Switch to dark' : 'Switch to light';
+}
+function toggleTheme() {
+  const light = document.documentElement.getAttribute('data-theme') !== 'light';
+  if (light) document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  try { localStorage.setItem('lightTheme', String(light)); } catch (e) {}
+  themeButtonLabel();
 }
 function openAbout() {
   document.getElementById('hamburger-menu').classList.remove('open');

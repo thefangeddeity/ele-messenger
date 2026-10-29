@@ -2,14 +2,15 @@ use anyhow::{Result, bail};
 use rand::RngExt;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, mpsc};
 
 use crate::identity::Identity;
 use crate::proto::{DEFAULT_TTL, MAX_PLAINTEXT, NodeId, PROTOCOL_VERSION, Wire};
-use crate::store::{Entry, MAX_NICK, MAX_ROOM, MAX_TEXT, Store};
+use crate::store::{Control, Entry, MAX_NICK, MAX_ROOM, MAX_TEXT, Store};
 
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(15);
 pub const RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -78,7 +79,13 @@ pub struct Node {
     /// What this machine is called in messages sent without a nick. It only
     /// travels inside messages, over encrypted links, never in a beacon or
     /// advertisement.
-    pub name: String,
+    name: RwLock<String>,
+    /// Where identity, passphrase and name live, when the node has a home on
+    /// disk (not in tests).
+    pub state_dir: Option<PathBuf>,
+    /// Asked to start over, e.g. with a new passphrase; whoever runs the
+    /// node (the service manager, or the app) brings it back.
+    pub restart: Notify,
     nearby: Mutex<HashMap<String, Heard>>,
     /// ELE servers announced on the local network.
     pub servers: crate::servers::Servers,
@@ -104,7 +111,9 @@ impl Node {
             dials: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             scout: false,
-            name: String::new(),
+            name: RwLock::new(String::new()),
+            state_dir: None,
+            restart: Notify::new(),
             servers: Default::default(),
             names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
@@ -205,7 +214,7 @@ impl Node {
             links.remove(&old_id);
         }
         let id = self.next_link.fetch_add(1, Ordering::Relaxed);
-        let greeting = [Wire::Hello { version: PROTOCOL_VERSION }, Wire::Summary(self.summary()), Wire::Name(self.name.clone())];
+        let greeting = [Wire::Hello { version: PROTOCOL_VERSION }, Wire::Summary(self.summary()), Wire::Name(self.name())];
         for w in greeting {
             if let Ok(b) = w.encode() {
                 let _ = tx.try_send(b);
@@ -265,6 +274,16 @@ impl Node {
         }
     }
 
+    pub fn name(&self) -> String {
+        self.name.read().unwrap().clone()
+    }
+
+    /// Sets this machine's name and tells every linked peer.
+    pub fn set_name(&self, name: String) {
+        *self.name.write().unwrap() = name.clone();
+        self.broadcast(None, &Wire::Name(name));
+    }
+
     fn name_of(&self, peer: &NodeId) -> Option<String> {
         self.names.lock().unwrap().get(peer).cloned()
     }
@@ -320,7 +339,8 @@ impl Node {
 
     pub fn post(&self, room: &str, nick: &str, text: &str, said_at: Option<u64>) -> Result<Entry> {
         let room = room.trim();
-        let nick = if nick.trim().is_empty() { self.name.as_str() } else { nick };
+        let machine = self.name();
+        let nick = if nick.trim().is_empty() { machine.as_str() } else { nick };
         if room.is_empty() || room.len() > MAX_ROOM || nick.len() > MAX_NICK || text.len() > MAX_TEXT || text.is_empty() {
             bail!("room 1-{MAX_ROOM} bytes, nick up to {MAX_NICK}, text 1-{MAX_TEXT}");
         }
@@ -353,6 +373,24 @@ impl Node {
         self.changed.notify_waiters();
         self.broadcast(None, &Wire::Entries { ttl: DEFAULT_TTL, entries: vec![entry.clone()] });
         Ok(entry)
+    }
+
+    /// Deletes one of this node's own messages on every node.
+    pub fn delete_own(&self, room: &str, seq: u64) -> Result<Entry> {
+        let control = Control::Delete { author: self.id_hex(), seq };
+        self.post(room, "", &control.text(), None)
+    }
+
+    /// Clears a room: for everyone (a control entry every node applies) or
+    /// only here (nothing leaves this node).
+    pub fn clear(&self, room: &str, everyone: bool) -> Result<()> {
+        if everyone {
+            self.post(room, "", &Control::Clear.text(), None)?;
+        } else {
+            self.with_store(|s| s.clear_here(room.trim(), now_ms()))?;
+        }
+        self.changed.notify_waiters();
+        Ok(())
     }
 
     pub async fn maintenance(&self) {

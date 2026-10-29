@@ -105,7 +105,14 @@ async fn main() -> Result<()> {
                 lan: !no_lan,
                 ble: !no_ble,
             };
-            if scout { daemon::scout(opts).await? } else { daemon::run(opts).await? }
+            if scout {
+                daemon::scout(opts).await?
+            } else {
+                daemon::run(opts).await?;
+                // Asked to start again (a new passphrase). Under systemd or
+                // launchd the service comes straight back; run by hand, run it again.
+                eprintln!("elemesh: settings changed, exiting so it can be started again");
+            }
         }
         Cmd::Send { room, text, nick } => {
             let body = serde_json::json!({ "nick": nick, "text": text }).to_string();

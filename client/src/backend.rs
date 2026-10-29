@@ -5,7 +5,7 @@
 //! same address, so everything after start-up is one code path: HTTP to
 //! 127.0.0.1:8740.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use elemesh::daemon;
 use serde::Deserialize;
 use std::time::Duration;
@@ -17,15 +17,18 @@ pub enum Mode {
     Starting,
     /// An elemesh daemon on this machine; the client only shows it.
     Daemon,
-    /// The client's own node, joined to the mesh.
+    /// The client's own node (scouting until it has the passphrase).
     Builtin,
-    /// The client's own node without the passphrase: listening only.
-    Scouting,
 }
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Status {
     pub node: String,
+    /// False while the node has no passphrase and only listens.
+    #[serde(default = "yes")]
+    pub joined: bool,
+    #[serde(default)]
+    pub version: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -68,10 +71,25 @@ pub struct Nearby {
 
 #[derive(Deserialize, Clone)]
 pub struct Message {
+    pub seq: u64,
+    #[serde(default)]
+    pub control: Option<Control>,
     pub author: String,
     pub ts_ms: u64,
     pub nick: String,
     pub text: String,
+}
+
+/// A delete or clear riding in the room; applied to the view, never shown.
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum Control {
+    Delete { author: String, seq: u64 },
+    Clear,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -126,6 +144,51 @@ pub fn post(room: &str, nick: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+fn send_json(method: &str, path: &str, body: serde_json::Value) -> Result<serde_json::Value> {
+    let a = agent(Duration::from_secs(5));
+    let url = format!("{API}{path}");
+    let mut r = match method {
+        "PUT" => a.put(&url).send_json(body)?,
+        "DELETE" => a.delete(&url).call()?,
+        _ => a.post(&url).send_json(body)?,
+    };
+    let v: serde_json::Value = r.body_mut().read_json().unwrap_or_default();
+    if r.status() != 200 {
+        bail!("{}", v["error"].as_str().unwrap_or("not accepted"));
+    }
+    Ok(v)
+}
+
+/// Deletes one of this machine's own messages, on every machine.
+pub fn delete(room: &str, seq: u64) -> Result<()> {
+    send_json("DELETE", &format!("/v1/rooms/{}/messages/{seq}", url_part(room)), serde_json::Value::Null).map(|_| ())
+}
+
+/// Clears a room for everyone on the mesh, or only on this machine.
+pub fn clear(room: &str, everyone: bool) -> Result<()> {
+    send_json("POST", &format!("/v1/rooms/{}/clear", url_part(room)), serde_json::json!({ "everyone": everyone })).map(|_| ())
+}
+
+/// Renames this machine; empty goes back to its host name.
+pub fn set_name(name: &str) -> Result<String> {
+    let v = send_json("PUT", "/v1/name", serde_json::json!({ "name": name }))?;
+    Ok(v["name"].as_str().unwrap_or_default().to_string())
+}
+
+/// Joins the mesh or changes its passphrase, then waits for the node to come
+/// back with it (the service manager or the app restarts it).
+pub fn set_passphrase(passphrase: &str) -> Result<()> {
+    send_json("POST", "/v1/passphrase", serde_json::json!({ "passphrase": passphrase }))?;
+    std::thread::sleep(Duration::from_secs(1));
+    for _ in 0..40 {
+        if status().map(|s| s.joined).unwrap_or(false) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    bail!("the passphrase is saved, but the mesh service hasn't come back yet")
+}
+
 fn url_part(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -138,33 +201,51 @@ fn url_part(s: &str) -> String {
 /// The client's own node, when it runs one. Dropping it stops the node and
 /// frees its ports.
 struct Embedded {
-    stop: tokio::sync::oneshot::Sender<()>,
+    stop: std::sync::Arc<tokio::sync::Notify>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: std::thread::JoinHandle<()>,
 }
 
 impl Embedded {
-    fn start(scout: bool) -> Result<Self> {
+    /// Runs the node the way the service does (scouting until there is a
+    /// passphrase) and starts it again whenever it asks, e.g. after joining.
+    /// Each run gets a fresh runtime, so its sockets close before the next.
+    fn start() -> Result<Self> {
+        use std::sync::atomic::Ordering;
         let opts = daemon::Options::new(daemon::state_dir(None)?);
-        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+        let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (stop_t, stopping_t) = (stop.clone(), stopping.clone());
         let thread = std::thread::Builder::new().name("ele-node".into()).spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => return tracing::error!("node runtime: {e}"),
-            };
-            rt.block_on(async move {
-                let run = async { if scout { daemon::scout(opts).await } else { daemon::run(opts).await } };
-                tokio::select! {
-                    r = run => if let Err(e) = r { tracing::error!("node stopped: {e:#}") },
-                    _ = stopped => {}
+            while !stopping_t.load(Ordering::SeqCst) {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => return tracing::error!("node runtime: {e}"),
+                };
+                let (opts, stop) = (opts.clone(), stop_t.clone());
+                let result = rt.block_on(async move {
+                    tokio::select! {
+                        r = daemon::run(opts) => Some(r),
+                        _ = stop.notified() => None,
+                    }
+                });
+                rt.shutdown_timeout(Duration::from_secs(2));
+                match result {
+                    None => break,
+                    Some(Ok(())) => std::thread::sleep(Duration::from_millis(300)),
+                    Some(Err(e)) => {
+                        tracing::error!("node stopped: {e:#}");
+                        std::thread::sleep(Duration::from_secs(5));
+                    }
                 }
-            });
-            rt.shutdown_timeout(Duration::from_secs(2));
+            }
         })?;
-        Ok(Self { stop, thread })
+        Ok(Self { stop, stopping, thread })
     }
 
     fn stop(self) {
-        let _ = self.stop.send(());
+        self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.stop.notify_one();
         let _ = self.thread.join();
     }
 }
@@ -187,33 +268,13 @@ impl Backend {
             self.mode = Mode::Daemon;
             return;
         }
-        let joined = daemon::state_dir(None).map(|d| daemon::has_passphrase(&d)).unwrap_or(false);
-        match Embedded::start(!joined) {
+        match Embedded::start() {
             Ok(e) => {
                 self.embedded = Some(e);
-                self.mode = if joined { Mode::Builtin } else { Mode::Scouting };
+                self.mode = Mode::Builtin;
             }
             Err(e) => self.error = Some(format!("could not start a node: {e:#}")),
         }
-    }
-
-    /// Stores the passphrase and restarts our node as a full member.
-    pub fn join(&mut self, passphrase: &str) -> Result<()> {
-        let dir = daemon::state_dir(None)?;
-        daemon::init(&dir, passphrase)?;
-        if let Some(e) = self.embedded.take() {
-            e.stop();
-        }
-        // The scout's sockets close with its runtime; give the OS a moment.
-        for _ in 0..20 {
-            if status().is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        self.embedded = Some(Embedded::start(false).context("starting the node")?);
-        self.mode = Mode::Builtin;
-        Ok(())
     }
 
     pub fn shutdown(&mut self) {

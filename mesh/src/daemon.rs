@@ -13,6 +13,7 @@ use crate::{api, identity, lan, store};
 pub const DEFAULT_API: &str = "127.0.0.1:8740";
 pub const DEFAULT_LAN_PORT: u16 = 47474;
 
+#[derive(Clone)]
 pub struct Options {
     pub state_dir: PathBuf,
     pub api: SocketAddr,
@@ -88,13 +89,19 @@ pub fn set_name(dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Runs a full node until the local API stops.
+/// Runs this machine's node: a full member when it has the passphrase,
+/// otherwise a scout until one is given. Returns Ok(()) only when the node
+/// asked to be started again (a new passphrase); whoever runs it restarts it.
 pub async fn run(opts: Options) -> Result<()> {
+    if !has_passphrase(&opts.state_dir) {
+        return scout(opts).await;
+    }
     let psk = identity::derive_psk(&read_passphrase(&opts.state_dir)?)?;
     let me = identity::Identity::load_or_create(&opts.state_dir)?;
     let store = store::Store::open(&opts.state_dir.join("messages.db"))?;
     let mut node = Node::new(me, psk, store);
-    node.name = name(&opts.state_dir);
+    node.set_name(name(&opts.state_dir));
+    node.state_dir = Some(opts.state_dir.clone());
     let node = Arc::new(node);
     tracing::info!("node {} state {}", node.id_hex(), opts.state_dir.display());
     let n = node.clone();
@@ -107,7 +114,8 @@ pub async fn run(opts: Options) -> Result<()> {
 pub async fn scout(opts: Options) -> Result<()> {
     let me = identity::Identity::load_or_create(&opts.state_dir)?;
     let mut node = Node::scout(me, store::Store::in_memory()?);
-    node.name = name(&opts.state_dir);
+    node.set_name(name(&opts.state_dir));
+    node.state_dir = Some(opts.state_dir.clone());
     let node = Arc::new(node);
     tracing::info!("scouting as {} (no passphrase yet)", node.id_hex());
     start(node, opts).await
@@ -123,7 +131,13 @@ async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
     if opts.ble {
         spawn_ble(node.clone());
     }
-    api::serve(node, opts.api).await
+    tokio::select! {
+        r = api::serve(node.clone(), opts.api) => r,
+        _ = node.restart.notified() => {
+            tracing::info!("restarting to apply the new settings");
+            Ok(())
+        }
+    }
 }
 
 /// Keeps a transport running: restarts it 10 s after it fails, backing off

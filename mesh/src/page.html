@@ -60,14 +60,27 @@
   .join { margin: 40px auto; max-width: 440px; text-align: center; color: var(--text-dim); padding: 0 16px; }
   .join h2 { color: var(--text); font-size: 17px; }
   .join code { color: var(--text); }
+  .menu-btn { font-size: 16px; padding: 2px 10px; }
+  #menu { position: fixed; top: 52px; left: 12px; width: 330px; max-width: calc(100vw - 24px); max-height: calc(100vh - 70px); overflow-y: auto;
+          background: var(--panel); border: 1px solid var(--border-strong); border-radius: 10px; padding: 12px 14px; z-index: 10;
+          box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+  #menu h3 { font-size: 13px; margin: 10px 0 4px; }
+  #menu h3:first-child { margin-top: 0; }
+  #menu .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  #menu input { flex: 1; min-width: 120px; }
+  #menu hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+  #menu-note { font-size: 12px; color: var(--text-dim); min-height: 1em; }
+  .m .del { float: right; font-size: 11px; padding: 0 6px; margin-left: 8px; opacity: 0; }
+  .m:hover .del { opacity: 1; }
+  .join input { width: 100%; margin: 8px 0; }
   @media (max-width: 700px) { main { flex-direction: column; } aside { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; } .me-line { margin-left: 0; } }
 </style>
 </head>
 <body>
 <header>
   <div class="top">
+    <button id="menu-btn" class="menu-btn" type="button" title="Menu" aria-haspopup="true">☰</button>
     <h1>ELE Mesh</h1>
-    <button id="theme" type="button" title="Switch between the light and dark look"></button>
     <span class="chip" id="mode">…</span>
     <span class="me-line" id="me"></span>
   </div>
@@ -75,6 +88,27 @@
     no internet or server needed, and carried further by any machine in between. Everyone with the mesh
     passphrase reads every room.</p>
 </header>
+<div id="menu" hidden>
+  <h3>This machine</h3>
+  <div class="hint" id="m-id"></div>
+  <div class="row"><input id="m-name" placeholder="name"><button id="m-rename" type="button">Rename</button></div>
+  <hr>
+  <h3 id="m-pass-title">Mesh passphrase</h3>
+  <div class="hint">The same on every machine in your group. Machines with different ones ignore each other.</div>
+  <div class="row"><input id="m-pass" type="password" placeholder="new passphrase" autocomplete="new-password"><button id="m-pass-go" type="button">Change</button></div>
+  <hr>
+  <h3>This room: <span id="m-room"></span></h3>
+  <div class="row"><button id="m-clear-me" type="button" title="Hides this room's messages on this machine only">Clear for me</button>
+    <button id="m-clear-all" type="button" title="Removes this room's messages on every machine in the mesh">Clear for everyone…</button></div>
+  <div class="hint">To delete one of your own messages, hover over it and click delete.</div>
+  <hr>
+  <h3>Appearance</h3>
+  <div class="row"><button id="theme" type="button"></button></div>
+  <hr>
+  <h3>About</h3>
+  <div id="m-about" class="hint"></div>
+  <div id="menu-note"></div>
+</div>
 <main>
   <aside>
     <h2>Around you: ELE Mesh</h2>
@@ -101,7 +135,9 @@
       <h2>This machine hasn't joined the ELE Mesh</h2>
       <p>It can see who is around but can't read or send until it has the mesh passphrase:
         the same one on every machine in your group.</p>
-      <p>Open the <b>ELE</b> app and enter it there, or run<br><code>elemesh init --passphrase '…'</code><br>and restart elemesh.</p>
+      <input id="join-pass" type="password" placeholder="mesh passphrase" autocomplete="current-password">
+      <button id="join-go" class="primary" type="button">Join</button>
+      <p class="hint" id="join-note"></p>
     </div>
   </section>
 </main>
@@ -114,7 +150,7 @@ $("nick").value = store.get("nick");
 $("room").value = store.get("room") || "home";
 let me = "", cursor = 0, gen = 0, msgs = [];
 
-function themeLabel() { $("theme").textContent = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light"; }
+function themeLabel() { $("theme").textContent = document.documentElement.getAttribute("data-theme") === "light" ? "switch to dark" : "switch to light"; }
 $("theme").onclick = () => {
   const light = document.documentElement.getAttribute("data-theme") !== "light";
   if (light) document.documentElement.setAttribute("data-theme", "light"); else document.documentElement.removeAttribute("data-theme");
@@ -128,6 +164,13 @@ function render() {
     const d = el("div", "m" + (m.author === me ? " mine" : ""));
     const who = el("div", "who", (m.nick || m.author.slice(0, 8)) + " · " + new Date(m.ts_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
     who.title = "from machine " + m.author.slice(0, 8);
+    if (m.author === me) {
+      const del = el("button", "del", "delete");
+      del.type = "button";
+      del.title = "Delete this message for everyone";
+      del.onclick = () => { if (confirm("Delete this message for everyone?")) act("DELETE", `/v1/rooms/${roomPath()}/messages/${m.seq}`, null, "message deleted"); };
+      who.append(del);
+    }
     d.append(who, el("div", null, m.text));
     return d;
   }) : [el("div", "hint", "No messages in this room yet.")]));
@@ -141,7 +184,12 @@ async function poll(g) {
       const j = await (await fetch(`/v1/rooms/${room}/messages?after=${cursor}&wait=25`)).json();
       if (g !== gen) return;
       if (j.messages.length) {
-        msgs.push(...j.messages);
+        for (const m of j.messages) {
+          const c = m.control;
+          if (!c) { msgs.push(m); continue; }
+          if (c === "clear") msgs = msgs.filter(x => x.ts_ms > m.ts_ms);
+          else if (c.delete) msgs = msgs.filter(x => !(x.author === c.delete.author && x.seq === c.delete.seq));
+        }
         msgs.sort((a, b) => a.ts_ms - b.ts_ms || a.author.localeCompare(b.author) || a.seq - b.seq);
         cursor = j.cursor;
         render();
@@ -212,6 +260,11 @@ async function status() {
     $("mode").textContent = joined ? "joined" : "not joined";
     $("me").textContent = s.name ? `this machine: ${s.name} (${s.node.slice(0, 8)})` : `this machine ${s.node.slice(0, 8)}`;
     $("nick").placeholder = s.name || "";
+    $("m-id").textContent = "id " + s.node.slice(0, 8);
+    $("m-name").placeholder = s.name || "name";
+    $("m-pass-title").textContent = joined ? "Mesh passphrase" : "Join the mesh";
+    $("m-pass-go").textContent = joined ? "Change" : "Join";
+    $("m-about").textContent = "ELE Mesh service " + (s.version || "");
     $("chat").hidden = !joined; $("notjoined").hidden = joined;
     drawAround(s);
     const rooms = await (await fetch("/v1/rooms")).json();
@@ -231,6 +284,40 @@ $("f").addEventListener("submit", async e => {
     body: JSON.stringify({ nick: $("nick").value.trim(), text }) });
   if (r.ok) $("text").value = "";
 });
+
+const roomPath = () => encodeURIComponent($("room").value.trim() || "home");
+
+async function act(method, path, body, done) {
+  $("menu-note").textContent = "working…";
+  try {
+    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    $("menu-note").textContent = r.ok ? done : (j.error || "not accepted");
+    return r.ok;
+  } catch { $("menu-note").textContent = "elemesh not responding"; return false; }
+}
+
+// Joining or a new passphrase restarts the mesh service; wait for it to return joined.
+async function setPassphrase(p, note) {
+  note.textContent = "saving…";
+  const r = await fetch("/v1/passphrase", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: p }) }).catch(() => null);
+  if (!r || !r.ok) { const j = r ? await r.json().catch(() => ({})) : {}; note.textContent = j.error || "not accepted"; return; }
+  note.textContent = "saved; the mesh service is restarting with it…";
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try { if ((await (await fetch("/v1/status")).json()).joined) { note.textContent = "done"; status(); switchRoom(); return; } } catch {}
+  }
+  note.textContent = "saved, but the mesh service hasn't come back yet";
+}
+
+$("menu-btn").onclick = e => { e.stopPropagation(); $("menu").hidden = !$("menu").hidden; $("m-room").textContent = $("room").value.trim() || "home"; };
+document.addEventListener("click", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) $("menu").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("menu").hidden = true; });
+$("m-rename").onclick = () => act("PUT", "/v1/name", { name: $("m-name").value.trim() }, "renamed").then(ok => { if (ok) { $("m-name").value = ""; status(); } });
+$("m-pass-go").onclick = () => { const p = $("m-pass").value; if (p.trim().length < 8) { $("menu-note").textContent = "at least 8 characters"; return; } $("m-pass").value = ""; setPassphrase(p, $("menu-note")); };
+$("m-clear-me").onclick = () => act("POST", `/v1/rooms/${roomPath()}/clear`, { everyone: false }, "cleared on this machine").then(ok => ok && switchRoom());
+$("m-clear-all").onclick = () => { if (confirm("Remove this room's messages on every machine in the mesh?")) act("POST", `/v1/rooms/${roomPath()}/clear`, { everyone: true }, "cleared for everyone"); };
+$("join-go").onclick = () => { const p = $("join-pass").value; if (p.trim().length < 8) { $("join-note").textContent = "at least 8 characters"; return; } $("join-pass").value = ""; setPassphrase(p, $("join-note")); };
 
 status(); setInterval(status, 3000); switchRoom();
 </script>

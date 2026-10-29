@@ -52,6 +52,12 @@ struct App {
     joining: Arc<AtomicBool>,
     join_error: Arc<Mutex<Option<String>>>,
     send_error: Arc<Mutex<Option<String>>>,
+    /// Menu: the machine-name box, the new-passphrase box, and the answer to
+    /// the last thing the menu did.
+    machine_name: String,
+    new_passphrase: String,
+    confirm_clear_all: bool,
+    menu_note: Arc<Mutex<Option<String>>>,
 }
 
 impl App {
@@ -75,6 +81,10 @@ impl App {
             joining: Default::default(),
             join_error: Default::default(),
             send_error: Default::default(),
+            machine_name: String::new(),
+            new_passphrase: String::new(),
+            confirm_clear_all: false,
+            menu_note: Default::default(),
         };
         theme::apply(&app.ctx, app.light);
         app.start_backend();
@@ -127,7 +137,17 @@ impl App {
                         }
                         after = cursor;
                         if !msgs.is_empty() {
-                            f.messages.extend(msgs);
+                            for m in msgs {
+                                // Deletes and clears change what is shown;
+                                // they are never shown themselves.
+                                match &m.control {
+                                    Some(backend::Control::Delete { author, seq }) => {
+                                        f.messages.retain(|x| !(x.author == *author && x.seq == *seq))
+                                    }
+                                    Some(backend::Control::Clear) => f.messages.retain(|x| x.ts_ms > m.ts_ms),
+                                    None => f.messages.push(m),
+                                }
+                            }
                             ctx.request_repaint();
                         }
                     }
@@ -152,16 +172,107 @@ impl App {
 
     fn join(&mut self) {
         let pass = std::mem::take(&mut self.passphrase);
-        let (b, mode, joining, err, ctx) =
-            (self.backend.clone(), self.mode.clone(), self.joining.clone(), self.join_error.clone(), self.ctx.clone());
+        let (joining, err, ctx) = (self.joining.clone(), self.join_error.clone(), self.ctx.clone());
         joining.store(true, Ordering::SeqCst);
         std::thread::spawn(move || {
-            let mut b = b.lock().unwrap();
-            *err.lock().unwrap() = b.join(&pass).err().map(|e| format!("{e:#}"));
-            *mode.lock().unwrap() = b.mode;
+            *err.lock().unwrap() = backend::set_passphrase(&pass).err().map(|e| format!("{e:#}"));
             joining.store(false, Ordering::SeqCst);
             ctx.request_repaint();
         });
+    }
+
+    /// Runs a menu action off the UI thread and shows how it went.
+    fn menu_action(&self, done: &'static str, f: impl FnOnce() -> anyhow::Result<()> + Send + 'static) {
+        let (note, ctx) = (self.menu_note.clone(), self.ctx.clone());
+        *note.lock().unwrap() = Some("working…".into());
+        std::thread::spawn(move || {
+            *note.lock().unwrap() = Some(match f() {
+                Ok(()) => done.to_string(),
+                Err(e) => format!("{e:#}"),
+            });
+            ctx.request_repaint();
+        });
+    }
+
+    /// The same menu as the mesh page and the server's web client.
+    fn menu(&mut self, ui: &mut egui::Ui, status: Option<&Status>) {
+        let joined = status.map(|s| s.joined).unwrap_or(false);
+        ui.set_min_width(300.0);
+
+        ui.strong("This machine");
+        if let Some(st) = status {
+            ui.label(egui::RichText::new(format!("id {}", short(&st.node))).small().weak());
+        }
+        ui.horizontal(|ui| {
+            let hint = status.map(|s| s.name.clone()).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut self.machine_name).hint_text(hint).desired_width(170.0));
+            if ui.button("Rename").on_hover_text("What other machines and your messages show; empty goes back to the computer's name").clicked() {
+                let name = std::mem::take(&mut self.machine_name);
+                self.menu_action("renamed", move || backend::set_name(&name).map(|_| ()));
+            }
+        });
+        ui.separator();
+
+        ui.strong(if joined { "Mesh passphrase" } else { "Join the mesh" });
+        ui.label(egui::RichText::new("The same on every machine in your group. Machines with different ones ignore each other.").small().weak());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.new_passphrase).password(true).hint_text("new passphrase").desired_width(170.0));
+            let ok = self.new_passphrase.trim().len() >= 8;
+            if ui.add_enabled(ok, egui::Button::new(if joined { "Change" } else { "Join" })).clicked() {
+                let p = std::mem::take(&mut self.new_passphrase);
+                self.menu_action("passphrase saved; the mesh service restarted with it", move || backend::set_passphrase(&p));
+            }
+        });
+        ui.separator();
+
+        ui.strong(format!("This room: {}", self.room));
+        if ui.button("Clear for me").on_hover_text("Hides this room's messages on this machine only").clicked() {
+            let room = self.room.clone();
+            self.menu_action("cleared on this machine", move || backend::clear(&room, false));
+            self.follow(self.room.clone());
+        }
+        if !self.confirm_clear_all {
+            if ui.button("Clear for everyone…").on_hover_text("Removes this room's messages on every machine in the mesh").clicked() {
+                self.confirm_clear_all = true;
+            }
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Every machine loses this room's messages.");
+                if ui.button("Clear").clicked() {
+                    let room = self.room.clone();
+                    self.menu_action("cleared for everyone", move || backend::clear(&room, true));
+                    self.confirm_clear_all = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    self.confirm_clear_all = false;
+                }
+            });
+        }
+        ui.label(egui::RichText::new("To delete one of your own messages, right-click it.").small().weak());
+        ui.separator();
+
+        ui.strong("Appearance");
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.light, "dark").clicked() && self.light {
+                self.light = false;
+                theme::apply(ui.ctx(), false);
+            }
+            if ui.selectable_label(self.light, "light").clicked() && !self.light {
+                self.light = true;
+                theme::apply(ui.ctx(), true);
+            }
+        });
+        ui.separator();
+
+        ui.strong("About");
+        ui.label(format!("ELE Messenger {}", env!("CARGO_PKG_VERSION")));
+        if let Some(st) = status.filter(|s| !s.version.is_empty()) {
+            ui.label(egui::RichText::new(format!("mesh service {}", st.version)).small().weak());
+        }
+        if let Some(n) = self.menu_note.lock().unwrap().as_ref() {
+            ui.separator();
+            ui.label(n);
+        }
     }
 }
 
@@ -240,17 +351,14 @@ impl eframe::App for App {
         egui::Panel::top("head").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
+                ui.menu_button("☰", |ui| self.menu(ui, status.as_ref())).response.on_hover_text("Menu");
                 ui.heading("ELE Mesh");
-                let switch = if self.light { "dark" } else { "light" };
-                if ui.small_button(switch).on_hover_text("Switch between the light and dark look").clicked() {
-                    self.light = !self.light;
-                    theme::apply(ui.ctx(), self.light);
-                }
+                let joined = status.as_ref().map(|s| s.joined).unwrap_or(true);
                 let (chip, tip) = match mode {
-                    Mode::Starting => ("starting…", "Looking for an ELE daemon on this computer"),
-                    Mode::Daemon => ("this computer's ELE daemon", "elemesh runs on this computer; the client shows it"),
-                    Mode::Builtin => ("built-in node", "No daemon here, so the client runs its own node"),
-                    Mode::Scouting => ("not joined", "Listening for ELE machines; enter the mesh passphrase to join"),
+                    Mode::Starting => ("starting…", "Looking for the mesh service on this computer"),
+                    _ if !joined => ("not joined", "Listening for ELE machines; enter the mesh passphrase to join"),
+                    Mode::Daemon => ("joined", "The mesh service runs on this computer; the app shows it"),
+                    Mode::Builtin => ("joined", "The app runs the mesh itself while it is open"),
                 };
                 ui.label(egui::RichText::new(chip).weak()).on_hover_text(tip);
                 if let Some(st) = &status {
@@ -271,12 +379,13 @@ impl eframe::App for App {
             egui::ScrollArea::vertical().show(ui, |ui| self.around(ui, mode, &list, &servers));
         });
 
-        egui::CentralPanel::default().show(ui, |ui| match mode {
-            Mode::Starting => {
+        let joined = status.as_ref().map(|s| s.joined);
+        egui::CentralPanel::default().show(ui, |ui| match (mode, joined) {
+            (Mode::Starting, _) | (_, None) => {
                 ui.centered_and_justified(|ui| ui.spinner());
             }
-            Mode::Scouting => self.join_card(ui, &list),
-            Mode::Daemon | Mode::Builtin => self.chat(ui),
+            (_, Some(false)) => self.join_card(ui, &list),
+            (_, Some(true)) => self.chat(ui),
         });
     }
 }
@@ -413,6 +522,8 @@ impl App {
         ui.separator();
 
         let bottom = 40.0;
+        let me = self.status.lock().unwrap().as_ref().map(|s| s.node.clone()).unwrap_or_default();
+        let mut delete: Option<u64> = None;
         let feed = self.feed.lock().unwrap();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -424,14 +535,26 @@ impl App {
                 }
                 for m in &feed.messages {
                     let who = if m.nick.is_empty() { short(&m.author) } else { m.nick.clone() };
-                    ui.horizontal_wrapped(|ui| {
+                    let row = ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new(time_of(m.ts_ms)).weak().monospace());
                         ui.label(egui::RichText::new(who).strong()).on_hover_text(format!("from machine {}", short(&m.author)));
                         ui.label(&m.text);
                     });
+                    if m.author == me {
+                        row.response.interact(egui::Sense::click()).context_menu(|ui| {
+                            if ui.button("Delete for everyone").clicked() {
+                                delete = Some(m.seq);
+                                ui.close();
+                            }
+                        });
+                    }
                 }
             });
         drop(feed);
+        if let Some(seq) = delete {
+            let room = self.room.clone();
+            self.menu_action("message deleted", move || backend::delete(&room, seq));
+        }
 
         ui.separator();
         ui.horizontal(|ui| {

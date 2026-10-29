@@ -69,6 +69,67 @@ async fn post(State(node): State<Arc<Node>>, Path(room): Path<String>, Json(p): 
     }
 }
 
+/// Deletes one of this node's own messages, on every node.
+async fn delete(State(node): State<Arc<Node>>, Path((room, seq)): Path<(String, u64)>) -> Response {
+    match node.delete_own(&room, seq) {
+        Ok(_) => Json(json!({ "deleted": seq })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct Clear {
+    /// true: for everyone on the mesh; false: only on this machine.
+    #[serde(default)]
+    everyone: bool,
+}
+
+async fn clear(State(node): State<Arc<Node>>, Path(room): Path<String>, Json(c): Json<Clear>) -> Response {
+    match node.clear(&room, c.everyone) {
+        Ok(()) => Json(json!({ "cleared": room, "everyone": c.everyone })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct NameBody {
+    name: String,
+}
+
+/// Renames this machine; an empty name goes back to the host name.
+async fn set_name(State(node): State<Arc<Node>>, Json(b): Json<NameBody>) -> Response {
+    let Some(dir) = node.state_dir.clone() else { return err(anyhow::anyhow!("this node has no state directory")) };
+    match crate::daemon::set_name(&dir, &b.name) {
+        Ok(()) => {
+            node.set_name(crate::daemon::name(&dir));
+            Json(json!({ "name": node.name() })).into_response()
+        }
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PassBody {
+    passphrase: String,
+}
+
+/// Joins the mesh or changes its passphrase. The node then starts again
+/// with it; the answer goes out first.
+async fn set_passphrase(State(node): State<Arc<Node>>, Json(b): Json<PassBody>) -> Response {
+    let Some(dir) = node.state_dir.clone() else { return err(anyhow::anyhow!("this node has no state directory")) };
+    match crate::daemon::init(&dir, &b.passphrase) {
+        Ok(_) => {
+            let n = node.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                n.restart.notify_one();
+            });
+            Json(json!({ "restarting": true })).into_response()
+        }
+        Err(e) => err(e),
+    }
+}
+
 async fn rooms(State(node): State<Arc<Node>>) -> Response {
     match node.with_store(|s| s.rooms()) {
         Ok(r) => Json(json!({ "rooms": r })).into_response(),
@@ -80,7 +141,8 @@ async fn status(State(node): State<Arc<Node>>) -> Response {
     let entries = node.with_store(|s| s.count()).unwrap_or(0);
     Json(json!({
         "node": node.id_hex(),
-        "name": node.name,
+        "name": node.name(),
+        "version": env!("CARGO_PKG_VERSION"),
         "joined": !node.scout,
         "entries": entries,
         "links": node.links(),
@@ -111,6 +173,10 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/status", get(status))
         .route("/v1/rooms", get(rooms))
         .route("/v1/rooms/{room}/messages", get(messages).post(post))
+        .route("/v1/rooms/{room}/messages/{seq}", axum::routing::delete(delete))
+        .route("/v1/rooms/{room}/clear", axum::routing::post(clear))
+        .route("/v1/name", axum::routing::put(set_name))
+        .route("/v1/passphrase", axum::routing::post(set_passphrase))
         .layer(middleware::from_fn(local_only))
         .with_state(node);
     let listener = tokio::net::TcpListener::bind(addr).await?;
