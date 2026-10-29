@@ -91,6 +91,43 @@ read traffic, or inject entries. Two households with different passphrases
 share the air but not the mesh. A neighbour joins by being given the
 passphrase: no server, no enrolment.
 
+## Deletes and clears
+
+The log is append-only and replicated, so removing a message is itself an
+entry: a **control entry** in the room (text prefixed `\u{1}ele:`, JSON
+body), synced, relayed and caught up like any message, applied in any order.
+
+- `delete {author, seq}` hides one message, and is honoured only when the
+  control's author wrote that message.
+- `clear` hides every message in the room up to the control's timestamp, for
+  everyone.
+- Clear-for-me is local only (`cleared_here`) and never leaves the node.
+
+Clients receive control entries in the message stream and apply them; they
+never show them. Retention prunes them with everything else after 7 days.
+
+## Sharing with devices that can't be nodes
+
+A phone or a browser can't run the mesh (no Bluetooth, no listening
+sockets). A machine can share its mesh page instead, through its own web
+server as `/elem/` (nginx snippet in `mesh/dist/nginx/`, or
+`tailscale serve --set-path /elem`). elemesh itself still binds 127.0.0.1
+only.
+
+- A request straight from this machine (loopback, no proxy headers, Host
+  `127.0.0.1`/`localhost`) has full access.
+- Anything else is a **visitor**: the page, `/v1/ping` and `/v1/login`
+  always; the rest only with a session cookie from `/v1/login`, given the
+  mesh passphrase (derived with argon2, plus a second's wait per miss) or
+  an invite.
+- `/v1/invite` makes a token that admits one device, once, within 24 h, so
+  a link can be shared without the passphrase.
+- Visitors post as this machine (with their own nick), and may clear for
+  everyone; renaming the machine, changing its passphrase and
+  clear-for-me are refused.
+- Sessions and invites live in memory: restarting the service signs
+  visitors out.
+
 ## Transports
 
 All transports carry the same encrypted byte stream; only the link layer
@@ -142,7 +179,8 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 
 ## Not in this step
 
-Media, private 1:1 encryption beyond the mesh PSK, couriers (BitChat §6.2),
+The tailnet transport (next), media, private 1:1 encryption beyond the mesh
+PSK, password-protected rooms, couriers (BitChat §6.2),
 macOS/Windows peripheral role, iOS/Android.
 
 ## Licensing

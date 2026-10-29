@@ -63,9 +63,10 @@ computer, and enter the mesh passphrase.
 
 - **Working, on real hardware:** Bluetooth and Wi-Fi links between Linux
   and macOS with no router or internet; offline catch-up; relaying; delete
-  and clear; machine names.
-- **Next:** the tailnet as a mesh transport; sharing a machine's mesh page
-  with phones on its network; private messages and password-protected rooms.
+  and clear; machine names; sharing a machine's mesh page with phones and
+  tablets at `/elem/`, behind the passphrase or a one-time invite link.
+- **Next:** the tailnet as a mesh transport; private messages and
+  password-protected rooms.
 - **Not yet:** a Mac can find other machines over Bluetooth but can't be
   found, so two Macs alone need Wi-Fi or a Linux machine between them.
 - **Later:** name accounts, built on the mesh.

@@ -112,23 +112,49 @@ when you start again.
 
 ## 6. Chat
 
-Open **http://127.0.0.1:8740/** in any browser on the same machine.
+Open the **ELE Messenger** app, or **http://127.0.0.1:8740/** in any browser
+on the same machine.
 
 - **Room**: everyone who types the same room name is in the same chat
   (default `home`).
 - **Name**: what others see next to your messages. Left empty, messages carry
-  this machine's name: its host name, or whatever `elemesh name "Kitchen laptop"`
-  set (restart elemesh afterwards).
-- The line at the top shows who you are linked to right now. *"no peers
-  in range"* means messages are saved and will go out when someone appears.
+  this machine's name.
+- **Around you** lists the ELE machines heard nearby; a green dot means
+  linked right now. With none in range, messages are kept and go out when
+  someone appears.
+- The **☰** menu: rename this machine, join or change the mesh passphrase
+  (the service restarts itself with it), clear this room for everyone or just
+  here, light or dark, copy an invite link (section 6a). Delete one of your
+  own messages by right-clicking it in the app, or hovering over it on the
+  page.
 
 From a terminal (handy over SSH):
 
 ```sh
 elemesh send home "on the second floor, all fine" --nick alex
 elemesh tail home          # print the room and follow new messages; Ctrl-C to quit
-elemesh status             # this node and its live links
+elemesh status             # this node, its links and who it hears
+elemesh name "Kitchen laptop"   # rename this machine ("" = its host name)
 ```
+
+## 6a. Share with phones and tablets
+
+A phone can't run the mesh, but it can use a computer's: the computer shares
+its mesh page as **/elem/** through its web server, behind the passphrase.
+
+- **Linux with nginx:** the package installs
+  `/etc/nginx/snippets/ele-messenger-mesh.conf`; include it in the server
+  block that serves this machine's pages (the camera suite already does).
+- **macOS, or any machine on the tailnet:**
+  `tailscale serve --bg --set-path /elem http://127.0.0.1:8740`.
+- On the phone, open `https://<machine>.<tailnet>.ts.net/elem/` (or the
+  machine's LAN address with `/elem/`) and enter the mesh passphrase once.
+- Or send an **invite link** instead (☰ → Copy invite link): it lets one
+  device in, once, within a day, without giving out the passphrase.
+
+A visitor reads, posts, deletes and clears for everyone, but can't rename the
+machine, change its passphrase or clear just its view. elemesh itself only
+ever listens on 127.0.0.1; the web server is the one way in.
 
 ## 7. Updating
 
@@ -201,8 +227,9 @@ it after you `init` again.
 
 ## Ports and privacy
 
-- `127.0.0.1:8740`: the chat page and local API. It is never exposed to the
-  network.
+- `127.0.0.1:8740`: the chat page and local API. elemesh only listens here;
+  other devices reach it through this machine's web server at `/elem/`
+  (section 6a), behind the passphrase or an invite.
 - `47474` TCP and UDP: mesh links and discovery beacons on the local network.
 - Bluetooth service `e1e5a3c0-7d1b-4f6a-9c1e-6d2b8a4f0e11`, advertised as
   `ele-<node id>`.
