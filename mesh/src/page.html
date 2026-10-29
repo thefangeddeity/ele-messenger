@@ -89,18 +89,26 @@
     passphrase reads every room.</p>
 </header>
 <div id="menu" hidden>
+  <div id="m-machine">
   <h3>This machine</h3>
   <div class="hint" id="m-id"></div>
   <div class="row"><input id="m-name" placeholder="name"><button id="m-rename" type="button">Rename</button></div>
   <hr>
+  </div>
+  <div id="m-pass-block">
   <h3 id="m-pass-title">Mesh passphrase</h3>
   <div class="hint">The same on every machine in your group. Machines with different ones ignore each other.</div>
   <div class="row"><input id="m-pass" type="password" placeholder="new passphrase" autocomplete="new-password"><button id="m-pass-go" type="button">Change</button></div>
   <hr>
+  </div>
   <h3>This room: <span id="m-room"></span></h3>
   <div class="row"><button id="m-clear-me" type="button" title="Hides this room's messages on this machine only">Clear for me</button>
     <button id="m-clear-all" type="button" title="Removes this room's messages on every machine in the mesh">Clear for everyone…</button></div>
   <div class="hint">To delete one of your own messages, hover over it and click delete.</div>
+  <hr>
+  <h3>Invite a phone or tablet</h3>
+  <div class="hint">A link that lets one device in for a day, without giving out the passphrase. Open it on that device.</div>
+  <div class="row"><button id="m-invite" type="button">Copy invite link</button></div>
   <hr>
   <h3>Appearance</h3>
   <div class="row"><button id="theme" type="button"></button></div>
@@ -127,6 +135,16 @@
       <button class="primary">Send</button>
     </form>
   </section>
+  <section class="chat" id="signin" hidden>
+    <div class="join">
+      <h2>Enter the mesh passphrase</h2>
+      <p>You're opening this computer's ELE Mesh from another device. Anyone with the
+        passphrase can read and write here, as part of this computer's mesh.</p>
+      <input id="signin-pass" type="password" placeholder="mesh passphrase" autocomplete="current-password">
+      <button id="signin-go" class="primary" type="button">Continue</button>
+      <p class="hint" id="signin-note"></p>
+    </div>
+  </section>
   <section class="chat" id="notjoined" hidden>
     <div class="join">
       <h2>This machine hasn't joined the ELE Mesh</h2>
@@ -140,12 +158,14 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
+// Where the API lives: next to this page, so it works at / and at /elem/.
+const API = location.pathname.replace(/[^/]*$/, "");
 const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set(k,v){ try { localStorage.setItem(k,v); } catch {} } };
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 $("nick").value = store.get("nick");
 $("room").value = store.get("room") || "home";
-let me = "", cursor = 0, gen = 0, msgs = [];
+let me = "", cursor = 0, gen = 0, msgs = [], visitor = false;
 
 function themeLabel() { $("theme").textContent = document.documentElement.getAttribute("data-theme") === "light" ? "switch to dark" : "switch to light"; }
 $("theme").onclick = () => {
@@ -165,7 +185,7 @@ function render() {
       const del = el("button", "del", "delete");
       del.type = "button";
       del.title = "Delete this message for everyone";
-      del.onclick = () => { if (confirm("Delete this message for everyone?")) act("DELETE", `/v1/rooms/${roomPath()}/messages/${m.seq}`, null, "message deleted"); };
+      del.onclick = () => { if (confirm("Delete this message for everyone?")) act("DELETE", `${API}v1/rooms/${roomPath()}/messages/${m.seq}`, null, "message deleted"); };
       who.append(del);
     }
     d.append(who, el("div", null, m.text));
@@ -178,7 +198,9 @@ async function poll(g) {
   const room = encodeURIComponent($("room").value.trim() || "home");
   while (g === gen) {
     try {
-      const j = await (await fetch(`/v1/rooms/${room}/messages?after=${cursor}&wait=25`)).json();
+      const res = await fetch(`${API}v1/rooms/${room}/messages?after=${cursor}&wait=25`);
+      if (res.status === 401) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      const j = await res.json();
       if (g !== gen) return;
       if (j.messages.length) {
         for (const m of j.messages) {
@@ -241,7 +263,16 @@ function drawAround(s) {
 
 async function status() {
   try {
-    const s = await (await fetch("/v1/status")).json();
+    const res = await fetch(API + "v1/status");
+    if (res.status === 401) {
+      $("chat").hidden = true; $("notjoined").hidden = true; $("signin").hidden = false;
+      $("mode").textContent = "sign in";
+      return;
+    }
+    $("signin").hidden = true;
+    const s = await res.json();
+    visitor = !!s.visitor;
+    for (const id of ["m-machine", "m-pass-block", "m-clear-me"]) { const e = $(id); if (e) e.hidden = visitor; }
     me = s.node;
     const joined = s.joined !== false;
     $("mode").textContent = joined ? "joined" : "not joined";
@@ -254,7 +285,7 @@ async function status() {
     $("m-about").textContent = "ELE Mesh service " + (s.version || "");
     $("chat").hidden = !joined; $("notjoined").hidden = joined;
     drawAround(s);
-    const rooms = await (await fetch("/v1/rooms")).json();
+    const rooms = await (await fetch(API + "v1/rooms")).json();
     $("rooms").replaceChildren(...rooms.rooms.map(r => { const o = el("option"); o.value = r; return o; }));
   } catch { $("mode").textContent = "elemesh not responding"; }
 }
@@ -266,7 +297,7 @@ $("f").addEventListener("submit", async e => {
   const text = $("text").value;
   if (!text.trim()) return;
   const room = encodeURIComponent($("room").value.trim() || "home");
-  const r = await fetch(`/v1/rooms/${room}/messages`, { method: "POST",
+  const r = await fetch(`${API}v1/rooms/${room}/messages`, { method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ nick: $("nick").value.trim(), text }) });
   if (r.ok) $("text").value = "";
@@ -287,12 +318,12 @@ async function act(method, path, body, done) {
 // Joining or a new passphrase restarts the mesh service; wait for it to return joined.
 async function setPassphrase(p, note) {
   note.textContent = "saving…";
-  const r = await fetch("/v1/passphrase", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: p }) }).catch(() => null);
+  const r = await fetch(API + "v1/passphrase", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: p }) }).catch(() => null);
   if (!r || !r.ok) { const j = r ? await r.json().catch(() => ({})) : {}; note.textContent = j.error || "not accepted"; return; }
   note.textContent = "saved; the mesh service is restarting with it…";
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 500));
-    try { if ((await (await fetch("/v1/status")).json()).joined) { note.textContent = "done"; status(); switchRoom(); return; } } catch {}
+    try { if ((await (await fetch(API + "v1/status")).json()).joined) { note.textContent = "done"; status(); switchRoom(); return; } } catch {}
   }
   note.textContent = "saved, but the mesh service hasn't come back yet";
 }
@@ -300,13 +331,48 @@ async function setPassphrase(p, note) {
 $("menu-btn").onclick = e => { e.stopPropagation(); $("menu").hidden = !$("menu").hidden; $("m-room").textContent = $("room").value.trim() || "home"; };
 document.addEventListener("click", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) $("menu").hidden = true; });
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("menu").hidden = true; });
-$("m-rename").onclick = () => act("PUT", "/v1/name", { name: $("m-name").value.trim() }, "renamed").then(ok => { if (ok) { $("m-name").value = ""; status(); } });
+$("m-rename").onclick = () => act("PUT", API + "v1/name", { name: $("m-name").value.trim() }, "renamed").then(ok => { if (ok) { $("m-name").value = ""; status(); } });
 $("m-pass-go").onclick = () => { const p = $("m-pass").value; if (p.trim().length < 8) { $("menu-note").textContent = "at least 8 characters"; return; } $("m-pass").value = ""; setPassphrase(p, $("menu-note")); };
-$("m-clear-me").onclick = () => act("POST", `/v1/rooms/${roomPath()}/clear`, { everyone: false }, "cleared on this machine").then(ok => ok && switchRoom());
-$("m-clear-all").onclick = () => { if (confirm("Remove this room's messages on every machine in the mesh?")) act("POST", `/v1/rooms/${roomPath()}/clear`, { everyone: true }, "cleared for everyone"); };
+$("m-clear-me").onclick = () => act("POST", `${API}v1/rooms/${roomPath()}/clear`, { everyone: false }, "cleared on this machine").then(ok => ok && switchRoom());
+$("m-clear-all").onclick = () => { if (confirm("Remove this room's messages on every machine in the mesh?")) act("POST", `${API}v1/rooms/${roomPath()}/clear`, { everyone: true }, "cleared for everyone"); };
 $("join-go").onclick = () => { const p = $("join-pass").value; if (p.trim().length < 8) { $("join-note").textContent = "at least 8 characters"; return; } $("join-pass").value = ""; setPassphrase(p, $("join-note")); };
 
-status(); setInterval(status, 3000); switchRoom();
+// The link's address is the one this page was opened with, so it works for
+// devices that can reach this computer the same way.
+$("m-invite").onclick = async () => {
+  $("menu-note").textContent = "making an invite…";
+  try {
+    const r = await fetch(API + "v1/invite", { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) { $("menu-note").textContent = j.error || "not accepted"; return; }
+    const base = location.origin + (API === "/" ? "/elem/" : API);
+    const link = base + "#invite=" + j.invite;
+    try { await navigator.clipboard.writeText(link); $("menu-note").textContent = "invite link copied (works once, for a day)"; }
+    catch { $("menu-note").textContent = "copy this invite link: " + link; }
+  } catch { $("menu-note").textContent = "elemesh not responding"; }
+};
+
+// Opened from an invite link: sign in with it, then drop it from the address.
+async function useInvite() {
+  const m = location.hash.match(/invite=([0-9a-f]+)/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const r = await fetch(API + "v1/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invite: m[1] }) }).catch(() => null);
+  if (!r || !r.ok) { const j = r ? await r.json().catch(() => ({})) : {}; $("signin-note").textContent = j.error || "invite not accepted"; }
+}
+
+async function signIn() {
+  const p = $("signin-pass").value;
+  $("signin-note").textContent = "checking…";
+  const r = await fetch(API + "v1/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: p }) }).catch(() => null);
+  if (r && r.ok) { $("signin-pass").value = ""; $("signin-note").textContent = ""; await status(); switchRoom(); return; }
+  const j = r ? await r.json().catch(() => ({})) : {};
+  $("signin-note").textContent = j.error || "elemesh not responding";
+}
+$("signin-go").onclick = signIn;
+$("signin-pass").addEventListener("keydown", e => { if (e.key === "Enter") signIn(); });
+
+useInvite().then(() => { status(); setInterval(status, 3000); switchRoom(); });
 </script>
 </body>
 </html>
