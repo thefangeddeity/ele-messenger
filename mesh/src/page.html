@@ -138,8 +138,10 @@
   <section class="chat" id="signin" hidden>
     <div class="join">
       <h2>Enter the mesh passphrase</h2>
-      <p>You're opening this computer's ELE Mesh from another device. Anyone with the
-        passphrase can read and write here, as part of this computer's mesh.</p>
+      <p>You're opening this computer's ELE Mesh from another device. Enter the
+        passphrase this computer uses; anyone with it can read and write here.</p>
+      <p class="hint">To change a computer's passphrase, do it on that computer itself:
+        in the ELE Messenger app, or at http://127.0.0.1:8740 there.</p>
       <input id="signin-pass" type="password" placeholder="mesh passphrase" autocomplete="current-password">
       <button id="signin-go" class="primary" type="button">Continue</button>
       <p class="hint" id="signin-note"></p>
@@ -265,11 +267,14 @@ async function status() {
   try {
     const res = await fetch(API + "v1/status");
     if (res.status === 401) {
+      // A visitor who hasn't signed in: nothing to offer but the sign-in.
+      visitor = true;
       $("chat").hidden = true; $("notjoined").hidden = true; $("signin").hidden = false;
+      $("menu-btn").hidden = true; $("menu").hidden = true;
       $("mode").textContent = "sign in";
       return;
     }
-    $("signin").hidden = true;
+    $("signin").hidden = true; $("menu-btn").hidden = false;
     const s = await res.json();
     visitor = !!s.visitor;
     for (const id of ["m-machine", "m-pass-block", "m-clear-me"]) { const e = $(id); if (e) e.hidden = visitor; }
