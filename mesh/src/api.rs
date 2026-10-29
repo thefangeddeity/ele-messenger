@@ -142,6 +142,12 @@ async fn set_passphrase(State(node): State<Arc<Node>>, v: Option<Extension<Visit
     }
 }
 
+/// "Is the mesh here?" for pages that link to it, answered without a
+/// sign-in and saying nothing else.
+async fn ping(State(node): State<Arc<Node>>) -> Response {
+    Json(json!({ "mesh": true, "joined": !node.scout })).into_response()
+}
+
 async fn rooms(State(node): State<Arc<Node>>) -> Response {
     match node.with_store(|s| s.rooms()) {
         Ok(r) => Json(json!({ "rooms": r })).into_response(),
@@ -224,7 +230,7 @@ async fn gate(mut req: Request, next: Next) -> Response {
         return StatusCode::FORBIDDEN.into_response();
     }
     let path = req.uri().path();
-    if path == "/" || path == "/v1/login" {
+    if path == "/" || path == "/v1/login" || path == "/v1/ping" {
         return next.run(req).await;
     }
     let signed_in = session_of(&req).is_some_and(|t| sessions().lock().unwrap().contains(&t));
@@ -297,6 +303,7 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/name", axum::routing::put(set_name))
         .route("/v1/passphrase", axum::routing::post(set_passphrase))
         .route("/v1/login", axum::routing::post(login))
+        .route("/v1/ping", get(ping))
         .route("/v1/invite", axum::routing::post(invite))
         .layer(middleware::from_fn(gate))
         .with_state(node);
