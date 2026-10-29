@@ -87,8 +87,6 @@ pub struct Node {
     /// node (the service manager, or the app) brings it back.
     pub restart: Notify,
     nearby: Mutex<HashMap<String, Heard>>,
-    /// ELE servers announced on the local network.
-    pub servers: crate::servers::Servers,
     /// Names peers gave over encrypted links.
     names: Mutex<HashMap<NodeId, String>>,
 }
@@ -114,7 +112,6 @@ impl Node {
             name: RwLock::new(String::new()),
             state_dir: None,
             restart: Notify::new(),
-            servers: Default::default(),
             names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
         }

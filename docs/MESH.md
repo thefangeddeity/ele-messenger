@@ -113,9 +113,7 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 2. **LAN** (the Wi-Fi fallback): TCP to peers found by UDP
    broadcast on the local subnet; works on a router-less ad-hoc network
    with link-local addresses.
-3. **Server bridge** (later): `server.py` reads and writes rooms through the
-   local API of the elemesh on the same host, so the existing web client
-   sees mesh traffic when the server is up.
+3. **Tailnet** (next): the same links as LAN, to the tailnet peers Tailscale reports, so the one chat reaches across the internet when there is one. There is no separate server: the mesh is the only chat (a server was removed in 1.5).
 
 ## Failure modes
 
@@ -135,7 +133,7 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 | TTL | 7 | BitChat |
 | relay jitter | 10–220 ms | BitChat |
 | sync interval | 15 s | BitChat |
-| retention | 7 days, 10 000 entries per room | server.py keeps 7 days |
+| retention | 7 days, 10 000 entries per room | |
 | max text | 2 KiB | ours |
 | BLE chunk | 180 bytes | under the 182-byte default MTU payload |
 | BLE scan | 6 s window, 9 s idle, none while linked | ours |

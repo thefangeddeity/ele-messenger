@@ -10,7 +10,7 @@
 </script>
 <style>
   /* Suite tokens, by name and value, shared with the camera viewer, the
-     server's web client and the ELE desktop app. */
+     the ELE desktop app. */
   :root {
     --bg: #111113; --panel: #1c1c1e; --panel-2: #242426;
     --border: #38383a; --border-strong: #48484a;
@@ -114,9 +114,6 @@
     <h2>Around you: ELE Mesh</h2>
     <p class="hint">Machines heard nearby. Linked ones share messages now.</p>
     <div id="machines"></div>
-    <h2 style="margin-top:14px">ELE servers</h2>
-    <p class="hint">The full chat platform: accounts, direct messages, groups, images. Works while the server and the network are up.</p>
-    <div id="servers"></div>
   </aside>
   <section class="chat" id="chat">
     <div class="bar">
@@ -229,27 +226,17 @@ function machines(s) {
 }
 
 function drawAround(s) {
-  const servers = s.servers || [];
   const list = machines(s);
   $("machines").replaceChildren(...(list.length ? list.map(m => {
-    const server = servers.find(sv => m.ips.some(ip => sv.addrs.includes(ip)));
     const id = m.id ? m.id.slice(0, 8) : null;
-    const name = m.name || (server && server.host) || id || "ELE machine (unnamed)";
+    const name = m.name || id || "ELE machine (unnamed)";
     const c = el("div", "card"), row = el("div", "row");
     row.append(el("span", "dot " + (m.linked.length ? "on" : "off"), m.linked.length ? "●" : "○"), el("b", null, name));
     if (id && id !== name) row.append(el("span", "id", id));
-    if (server) row.append(el("span", "tag", "also a server"));
     const how = m.linked.length ? `linked over ${m.linked.map(transportName).join(", ")}` : `heard over ${m.heard.map(transportName).join(", ")}`;
     c.append(row, el("div", "sub", `${how} · ${m.seen} s ago`));
     return c;
   }) : [el("p", "hint", "No ELE machines around yet. Listening over Bluetooth and Wi-Fi…")]));
-  $("servers").replaceChildren(...(servers.length ? servers.map(sv => {
-    const c = el("div", "card"), row = el("div", "row");
-    const open = el("a", "btn", "Open"); open.href = sv.url; open.target = "_blank"; open.rel = "noopener";
-    row.append(el("span", "url", sv.url), open);
-    c.append(el("b", null, sv.name), row);
-    return c;
-  }) : [el("p", "hint", "No ELE servers around.")]));
 }
 
 async function status() {

@@ -1,7 +1,6 @@
-//! ELE desktop client. Shows the ELE Mesh (one shared group for the ELE
-//! machines around you) next to the ELE servers on the network, and chats on
-//! the mesh through the local API, running its own node if this machine has
-//! no elemesh daemon.
+//! ELE Messenger desktop app. Shows the ELE Mesh (one shared group for the
+//! ELE machines around you) and chats on it through the local API, running
+//! its own node if this machine has no elemesh service.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -194,7 +193,7 @@ impl App {
         });
     }
 
-    /// The same menu as the mesh page and the server's web client.
+    /// The same menu as the mesh page.
     fn menu(&mut self, ui: &mut egui::Ui, status: Option<&Status>) {
         let joined = status.map(|s| s.joined).unwrap_or(false);
         ui.set_min_width(300.0);
@@ -345,7 +344,6 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let mode = *self.mode.lock().unwrap();
         let status = self.status.lock().unwrap().clone();
-        let servers: Vec<backend::Server> = status.as_ref().map(|s| s.servers.clone()).unwrap_or_default();
         let list = status.as_ref().map(machines).unwrap_or_default();
 
         egui::Panel::top("head").show(ui, |ui| {
@@ -376,7 +374,7 @@ impl eframe::App for App {
         });
 
         egui::Panel::left("around").resizable(true).default_size(290.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| self.around(ui, mode, &list, &servers));
+            egui::ScrollArea::vertical().show(ui, |ui| self.around(ui, mode, &list));
         });
 
         let joined = status.as_ref().map(|s| s.joined);
@@ -391,7 +389,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine], servers: &[backend::Server]) {
+    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine]) {
         ui.add_space(4.0);
         ui.strong("Around you: ELE Mesh");
         ui.label(egui::RichText::new("Machines heard nearby. Linked ones share messages now.").small().weak());
@@ -403,24 +401,18 @@ impl App {
             });
         }
         for m in list {
-            let server = servers.iter().find(|s| m.ips.iter().any(|ip| s.addrs.contains(ip)));
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let t = theme::tokens(self.light);
                     let (dot, colour) = if m.linked.is_empty() { ("○", t.text_muted) } else { ("●", t.success) };
-                    // The name it gave over a link; else the host name its server
-                    // announces; else the start of its id.
-                    let host = server.map(|s| s.host.clone()).filter(|h| !h.is_empty());
+                    // The name it gave over a link, else the start of its id.
                     let id = m.id.as_deref().map(short);
-                    let name = m.name.clone().or(host).or(id.clone()).unwrap_or_else(|| "ELE machine (unnamed)".into());
+                    let name = m.name.clone().or(id.clone()).unwrap_or_else(|| "ELE machine (unnamed)".into());
                     ui.label(egui::RichText::new(dot).color(colour));
                     ui.label(egui::RichText::new(&name).strong());
                     if let Some(id) = id.filter(|i| *i != name) {
                         ui.label(egui::RichText::new(id).small().weak());
-                    }
-                    if server.is_some() {
-                        ui.label(egui::RichText::new("also a server").small()).on_hover_text("This machine also runs an ELE server");
                     }
                 });
                 let mut ts: Vec<&str> = m.linked.iter().map(|t| transport_name(t)).collect();
@@ -433,31 +425,6 @@ impl App {
                     format!("linked over {} · {} s ago", ts.join(", "), m.seen_s)
                 };
                 ui.label(egui::RichText::new(line).small());
-            });
-        }
-
-        ui.add_space(14.0);
-        ui.strong("ELE servers");
-        ui.label(
-            egui::RichText::new("The full chat platform: accounts, direct messages, groups, images. Works while the server and the network are up.")
-                .small()
-                .weak(),
-        );
-        ui.add_space(4.0);
-        if servers.is_empty() {
-            ui.label("No ELE servers around.");
-        }
-        for s in servers {
-            ui.group(|ui| {
-                ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new(&s.name).strong());
-                let url = s.url.clone();
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&url).small().monospace());
-                    if ui.button("Open").on_hover_text("Open this server's page in your browser").clicked() {
-                        let _ = webbrowser::open(&url);
-                    }
-                });
             });
         }
     }

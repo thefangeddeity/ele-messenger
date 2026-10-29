@@ -122,7 +122,6 @@ pub async fn scout(opts: Options) -> Result<()> {
 }
 
 async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
-    crate::servers::browse(node.servers.clone(), || {});
     if opts.lan {
         let n = node.clone();
         let port = opts.lan_port;

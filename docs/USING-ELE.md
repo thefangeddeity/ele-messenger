@@ -3,14 +3,9 @@
 ELE lets the computers in your home send each other messages even when the
 internet, the router or the power is out.
 
-## The two parts
-
-- **ELE Mesh**: one group chat shared by every ELE computer within reach. It
-  works over Bluetooth and Wi-Fi, with no internet. Everyone in it can read
-  every room.
-- **ELE servers**: the fuller messenger, with accounts, private messages,
-  groups and photos. It works only while the server computer and the home
-  network are on.
+It is one group chat, the **ELE Mesh**, shared by every ELE computer within
+reach. It works over Bluetooth and Wi-Fi, with no internet and no server.
+Everyone in it can read every room.
 
 ## Getting started (once on each computer)
 
@@ -31,8 +26,10 @@ internet, the router or the power is out.
 - Type and press Enter. Leave **Name** empty to sign with the computer's name.
 - **Around you** lists nearby ELE computers. A green dot means connected
   right now.
-- **ELE servers** lists the servers on your network. Click **Open** to use the
-  fuller messenger in your browser.
+- The **☰** menu renames this computer, changes the passphrase, clears a
+  room (for you, or for everyone) and switches light or dark. To delete one
+  of your own messages, right-click it in the app, or hover over it on the
+  web page.
 
 ## When something goes wrong
 
@@ -44,8 +41,6 @@ internet, the router or the power is out.
 - **Two Macs on their own** can't reach each other over Bluetooth yet. Keep a
   Linux computer nearby, or put them on the same Wi-Fi.
 - **On Windows,** click Allow when Windows asks about the firewall.
-- **The server page asks for a name and PIN:** that server is having
-  trouble. Restart that computer, or use the mesh meanwhile.
 
 ## Good to know
 

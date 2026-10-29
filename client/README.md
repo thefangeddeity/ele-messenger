@@ -5,9 +5,9 @@ One window, the same on Linux, macOS and Windows (egui).
 - **ELE Mesh** — one shared group for the ELE machines within reach:
   Bluetooth and Wi-Fi, no internet or server needed, carried further by any
   machine in between. Everyone with the mesh passphrase reads every room.
-- **ELE servers** — the full chat platform (accounts, direct messages,
-  groups, images), found on the network over mDNS (`_ele-messenger._tcp`).
-  *Open* shows a server's page in your browser.
+- The **☰** menu: this machine (rename), the mesh passphrase (join or
+  change), this room (clear for me, clear for everyone), appearance, about.
+  Right-click one of your own messages to delete it for everyone.
 
 ## How it connects
 
