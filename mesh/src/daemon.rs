@@ -183,9 +183,19 @@ fn spawn_ble(node: Arc<Node>) {
     supervise(node.clone(), "ble", move || crate::ble_linux::run(node.clone()));
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn spawn_ble(node: Arc<Node>) {
     supervise(node.clone(), "ble", move || crate::ble_central::run(node.clone()));
+}
+
+/// Windows finds others as a central and can be found as a peripheral; each
+/// role restarts on its own.
+#[cfg(target_os = "windows")]
+fn spawn_ble(node: Arc<Node>) {
+    let n = node.clone();
+    supervise(node.clone(), "ble", move || crate::ble_central::run(n.clone()));
+    let n = node.clone();
+    supervise(node, "ble-peripheral", move || crate::ble_windows::run(n.clone()));
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

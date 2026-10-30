@@ -30,6 +30,9 @@ tokio = { version = "1.53.3", features = ["full", "test-util"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Devices_Bluetooth_GenericAttributeProfile", "Foundation", "Foundation_Collections", "Storage_Streams"] }
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 btleplug = "0.13.5"
 uuid = "1"

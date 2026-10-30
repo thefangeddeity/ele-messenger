@@ -1,6 +1,6 @@
-//! BLE central role via btleplug (macOS, Windows). This side cannot advertise
-//! yet, so it dials every ELE node it hears; the link table keeps one link
-//! per peer.
+//! BLE central role via btleplug (macOS, Windows): dials every ELE node it
+//! hears; the link table keeps one link per peer. On Windows, ble_windows
+//! advertises alongside it, so the machine can be found too.
 
 use anyhow::{Context, Result};
 use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, ScanFilter, WriteType};
