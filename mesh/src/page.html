@@ -282,7 +282,9 @@ function drawAround(s) {
   let heading = null;
   if (!local.includes("ble")) out.push(el("p", "hint", "This machine has no Bluetooth, so Wi-Fi/LAN is all it can link over."));
   for (const m of list) {
-    const tier = TIERS[tierOf(m, local)];
+    // On a machine missing a connection type, Full and Partial are judged
+    // from here, not as a property of the other machine.
+    const t = tierOf(m, local), tier = TIERS[t] + (t <= 2 && local.length < LOCAL.length ? " from here" : "");
     if (tier !== heading) { out.push(el("div", "tier", tier)); heading = tier; }
     const id = m.id ? m.id.slice(0, 8) : null;
     const name = m.name || "ELE machine (unnamed)";

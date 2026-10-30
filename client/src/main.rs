@@ -17,13 +17,23 @@ use std::time::Duration;
 const POLL: Duration = Duration::from_secs(2);
 const WAIT_S: u64 = 20;
 
+/// macOS shows the window icon in the Dock while the app runs, so it gets the
+/// rounded tile with a margin that other Mac apps use. Linux gets the tile
+/// filling the canvas and Windows the full art, as the camera suite does.
+#[cfg(target_os = "macos")]
+const APP_ICON: &[u8] = include_bytes!("../assets/icon-macos.png");
+#[cfg(windows)]
+const APP_ICON: &[u8] = include_bytes!("../assets/icon.png");
+#[cfg(not(any(target_os = "macos", windows)))]
+const APP_ICON: &[u8] = include_bytes!("../assets/icon-linux.png");
+
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "elemesh=info,ele=info".into()))
         .init();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("ELE Messenger").with_inner_size([920.0, 620.0]).with_min_inner_size([560.0, 380.0])
-            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
+            .with_icon(eframe::icon_data::from_png_bytes(APP_ICON).unwrap_or_default()),
         ..Default::default()
     };
     eframe::run_native("ELE", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
@@ -397,7 +407,11 @@ impl eframe::App for App {
         egui::Panel::top("head").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.menu_button("☰", |ui| self.menu(ui, status.as_ref())).response.on_hover_text("Menu");
+                // The menu holds text fields (name, passphrase); egui's default
+                // closes a menu on any click, including a click into a field.
+                let menu = egui::containers::menu::MenuButton::new("☰")
+                    .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
+                menu.ui(ui, |ui| self.menu(ui, status.as_ref())).0.on_hover_text("Menu");
                 ui.heading("ELE Mesh");
                 let joined = status.as_ref().map(|s| s.joined).unwrap_or(true);
                 let (chip, tip) = match mode {
@@ -453,12 +467,15 @@ impl App {
         if !local.is_empty() && !local.iter().any(|t| t == "ble") {
             ui.label(egui::RichText::new("This machine has no Bluetooth, so Wi-Fi/LAN is all it can link over.").small().weak());
         }
-        let mut heading = None;
+        let mut heading: Option<String> = None;
         for m in list {
-            let tier = TIERS[m.tier(local)];
-            if heading != Some(tier) {
+            // On a machine missing a connection type, Full and Partial are
+            // judged from here, not as a property of the other machine.
+            let t = m.tier(local);
+            let tier = if t <= 2 && local.len() < 2 { format!("{} from here", TIERS[t]) } else { TIERS[t].to_string() };
+            if heading.as_deref() != Some(tier.as_str()) {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(tier).small().strong().weak());
+                ui.label(egui::RichText::new(&tier).small().strong().weak());
                 heading = Some(tier);
             }
             ui.group(|ui| {

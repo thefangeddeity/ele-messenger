@@ -58,11 +58,11 @@ if [ -x "$bin/ele" ]; then
   iconset=$(mktemp -d)/ele.iconset
   mkdir -p "$iconset"
   for s in 16 32 128 256 512; do
-    sips -z $s $s "$here/../../client/assets/icon.png" --out "$iconset/icon_${s}x${s}.png" >/dev/null
-    d=$((s * 2)); [ $d -le 1024 ] && sips -z $d $d "$here/../../client/assets/icon.png" --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+    sips -z $s $s "$here/../../client/assets/icon-macos.png" --out "$iconset/icon_${s}x${s}.png" >/dev/null
+    d=$((s * 2)); [ $d -le 1024 ] && sips -z $d $d "$here/../../client/assets/icon-macos.png" --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$iconset" -o "$ui/Contents/Resources/ele.icns"
   codesign --force --sign - --identifier org.ele-messenger.app     -r="designated => identifier \"org.ele-messenger.app\"" "$ui"
   touch "$ui"
 fi
-echo "installed $version; log: ~/Library/Logs/elemesh.log; chat: http://127.0.0.1:8740/"
+[ -n "${ELE_STAGE:-}" ] && echo "staged $version in $dest" || echo "installed $version; log: ~/Library/Logs/elemesh.log; chat: http://127.0.0.1:8740/"
