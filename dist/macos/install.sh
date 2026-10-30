@@ -12,7 +12,9 @@ arg=${1:-target/release}
 case $arg in */elemesh) bin=$(dirname "$arg") ;; *) bin=$arg ;; esac
 here=$(cd "$(dirname "$0")" && pwd)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$here/../../mesh/Cargo.toml" | head -1)
-app="$HOME/Applications/ELE Mesh.app"
+# ELE_STAGE (used by build-dmg.sh) builds the bundles there and installs nothing.
+dest=${ELE_STAGE:-$HOME/Applications}
+app="$dest/ELE Mesh.app"
 label=org.ele-messenger.elemesh
 agent="$HOME/Library/LaunchAgents/$label.plist"
 
@@ -25,6 +27,7 @@ cp "$bin/elemesh" "$app/Contents/MacOS/elemesh"
 codesign --force --sign - --identifier "$label" \
   -r="designated => identifier \"$label\"" "$app"
 
+if [ -z "${ELE_STAGE:-}" ]; then
 cat > "$agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -44,10 +47,11 @@ EOF
 
 launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$agent"
+fi
 
 # The app: same ad-hoc signing, so a rebuild keeps its Bluetooth grant too.
 if [ -x "$bin/ele" ]; then
-  ui="$HOME/Applications/ELE Messenger.app"
+  ui="$dest/ELE Messenger.app"
   mkdir -p "$ui/Contents/MacOS" "$ui/Contents/Resources"
   sed "s/@VERSION@/$version/" "$here/Messenger.Info.plist" > "$ui/Contents/Info.plist"
   cp "$bin/ele" "$ui/Contents/MacOS/ele"

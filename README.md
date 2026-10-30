@@ -56,7 +56,7 @@ on GitHub carries the files below.
   `systemctl --user enable --now elemesh` once.
 - **Debian / Ubuntu (24.04 and later):** `sudo apt install ./ele-messenger_<version>_amd64.deb`,
   then `systemctl --user enable --now elemesh` once.
-- **macOS:** from a build, `sh dist/macos/install.sh` puts **ELE Messenger**
+- **macOS:** open `ELE-Messenger-<version>-macos.dmg` and right-click → Open **Install ELE Messenger** (or, from a build, `sh dist/macos/install.sh`); it puts **ELE Messenger**
   and the **ELE Mesh** service in `~/Applications`; the service starts at login.
 - **Windows:** unzip `ELE-Messenger-<version>-windows.zip` and run
   `powershell -ExecutionPolicy Bypass -File install.ps1`: ELE Messenger
