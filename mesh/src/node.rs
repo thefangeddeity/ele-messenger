@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use rand::RngExt;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,6 +89,9 @@ pub struct Node {
     nearby: Mutex<HashMap<String, Heard>>,
     /// Names peers gave over encrypted links.
     names: Mutex<HashMap<NodeId, String>>,
+    /// Transports this machine has running now (no Bluetooth adapter: no
+    /// "ble"), so clients can tell a link from as good as it gets here.
+    transports: Mutex<BTreeSet<&'static str>>,
 }
 
 enum Dial {
@@ -114,7 +117,17 @@ impl Node {
             restart: Notify::new(),
             names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
+            transports: Default::default(),
         }
+    }
+
+    pub fn set_transport(&self, name: &'static str, up: bool) {
+        let mut t = self.transports.lock().unwrap();
+        if up { t.insert(name); } else { t.remove(name); }
+    }
+
+    pub fn transports(&self) -> Vec<&'static str> {
+        self.transports.lock().unwrap().iter().copied().collect()
     }
 
     /// A node that has no passphrase: its links could never handshake.

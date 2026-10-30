@@ -22,7 +22,8 @@ fn main() -> eframe::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "elemesh=info,ele=info".into()))
         .init();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("ELE Messenger").with_inner_size([920.0, 620.0]).with_min_inner_size([560.0, 380.0]),
+        viewport: egui::ViewportBuilder::default().with_title("ELE Messenger").with_inner_size([920.0, 620.0]).with_min_inner_size([560.0, 380.0])
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
         ..Default::default()
     };
     eframe::run_native("ELE", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
@@ -213,7 +214,7 @@ impl App {
         ui.separator();
 
         ui.strong(if joined { "Mesh passphrase" } else { "Join the mesh" });
-        ui.label(egui::RichText::new("The same on every machine in your group. Machines with different ones ignore each other.").small().weak());
+        ui.label(egui::RichText::new("Changes this computer only. Use the same passphrase on every computer: computers with different ones ignore each other.").small().weak());
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.new_passphrase).password(true).hint_text("new passphrase").desired_width(170.0));
             let ok = self.new_passphrase.trim().len() >= 8;
@@ -222,6 +223,7 @@ impl App {
                 self.menu_action("passphrase saved; the mesh service restarted with it", move || backend::set_passphrase(&p));
             }
         });
+        ui.label(egui::RichText::new(PASSPHRASE_RULE).small().weak());
         ui.separator();
 
         ui.strong(format!("This room: {}", self.room));
@@ -314,8 +316,18 @@ fn machines(st: &Status) -> Vec<Machine> {
         m.heard.sort_by_key(|t| transport_rank(t));
         m.heard.dedup();
     }
-    out.sort_by_cached_key(|m| (m.tier(), m.name.clone().or(m.id.clone()).unwrap_or_default().to_lowercase(), m.id.clone()));
+    let local = local_transports(st);
+    out.sort_by_cached_key(|m| (m.tier(&local), m.name.clone().or(m.id.clone()).unwrap_or_default().to_lowercase(), m.id.clone()));
     out
+}
+
+const PASSPHRASE_RULE: &str = "At least 8 characters. Letters, numbers, spaces and symbols all work, and capitals count.      A few unrelated words is easy to type and hard to guess.";
+
+/// The local transports this machine can link over, from its service; an
+/// older service doesn't say, so assume both.
+fn local_transports(st: &Status) -> Vec<String> {
+    let have: Vec<String> = st.transports.iter().flatten().filter(|t| *t == "ble" || *t == "lan").cloned().collect();
+    if have.is_empty() { vec!["ble".into(), "lan".into()] } else { have }
 }
 
 /// Headings for [`Machine::tier`]; the two partial ranks share one.
@@ -323,16 +335,22 @@ const TIERS: [&str; 5] = ["Full mesh access", "Partial mesh access", "Partial me
 
 impl Machine {
     /// Groups by mesh access, never by time, so a row only moves when a
-    /// machine gains or loses a link. Partial access ranks Bluetooth above
-    /// Wi-Fi/LAN: it is the link that outlasts the power and the router.
-    fn tier(&self) -> usize {
+    /// machine gains or loses a link. Full means linked over every local
+    /// transport this machine has, so a machine without Bluetooth can still
+    /// reach it. Partial access ranks Bluetooth above Wi-Fi/LAN: it is the
+    /// link that outlasts the power and the router.
+    fn tier(&self, local: &[String]) -> usize {
         let has = |t: &str| self.linked.iter().any(|l| l == t);
-        match (self.linked.is_empty(), has("ble"), has("lan")) {
-            (true, _, _) => 4,
-            (_, true, true) => 0,
-            (_, true, false) => 1,
-            (_, false, true) => 2,
-            _ => 3,
+        if self.linked.is_empty() {
+            4
+        } else if local.iter().all(|t| has(t)) {
+            0
+        } else if has("ble") {
+            1
+        } else if has("lan") {
+            2
+        } else {
+            3
         }
     }
 }
@@ -391,7 +409,8 @@ impl eframe::App for App {
                 ui.label(egui::RichText::new(chip).weak()).on_hover_text(tip);
                 if let Some(st) = &status {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(if st.name.is_empty() { format!("this machine {}", short(&st.node)) } else { format!("this machine: {} ({})", st.name, short(&st.node)) }).weak().monospace());
+                        ui.label(egui::RichText::new(if st.name.is_empty() { "this machine (unnamed)".to_string() } else { format!("this machine: {}", st.name) }).weak().monospace())
+                            .on_hover_text(format!("machine id {}", short(&st.node)));
                     });
                 }
             });
@@ -404,7 +423,8 @@ impl eframe::App for App {
         });
 
         egui::Panel::left("around").resizable(true).default_size(290.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| self.around(ui, mode, &list));
+            let local = status.as_ref().map(local_transports).unwrap_or_default();
+            egui::ScrollArea::vertical().show(ui, |ui| self.around(ui, mode, &list, &local));
         });
 
         let joined = status.as_ref().map(|s| s.joined);
@@ -419,7 +439,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine]) {
+    fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine], local: &[String]) {
         ui.add_space(4.0);
         ui.strong("Around you: ELE Mesh");
         ui.label(egui::RichText::new("Machines heard nearby. Linked ones share messages.").small().weak());
@@ -430,9 +450,12 @@ impl App {
                 ui.label(if mode == Mode::Starting { "Starting…" } else { "No ELE machines around yet. Listening over Bluetooth and Wi-Fi…" });
             });
         }
+        if !local.is_empty() && !local.iter().any(|t| t == "ble") {
+            ui.label(egui::RichText::new("This machine has no Bluetooth, so Wi-Fi/LAN is all it can link over.").small().weak());
+        }
         let mut heading = None;
         for m in list {
-            let tier = TIERS[m.tier()];
+            let tier = TIERS[m.tier(local)];
             if heading != Some(tier) {
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(tier).small().strong().weak());
@@ -443,13 +466,13 @@ impl App {
                 ui.horizontal(|ui| {
                     let t = theme::tokens(self.light);
                     let (dot, colour) = if m.linked.is_empty() { ("○", t.text_muted) } else { ("●", t.success) };
-                    // The name it gave over a link, else the start of its id.
-                    let id = m.id.as_deref().map(short);
-                    let name = m.name.clone().or(id.clone()).unwrap_or_else(|| "ELE machine (unnamed)".into());
+                    // The name it gave over a link; the id is the identity,
+                    // not something to read, so it stays on hover.
+                    let name = m.name.clone().unwrap_or_else(|| "ELE machine (unnamed)".into());
                     ui.label(egui::RichText::new(dot).color(colour));
-                    ui.label(egui::RichText::new(&name).strong());
-                    if let Some(id) = id.filter(|i| *i != name) {
-                        ui.label(egui::RichText::new(id).small().weak());
+                    let r = ui.label(egui::RichText::new(&name).strong());
+                    if let Some(id) = m.id.as_deref() {
+                        r.on_hover_text(format!("machine id {}", short(id)));
                     }
                 });
                 let names = |ts: &[String]| ts.iter().map(|t| transport_name(t)).collect::<Vec<_>>().join(", ");
@@ -482,6 +505,8 @@ impl App {
             let edit = ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.passphrase).password(true).hint_text("mesh passphrase"));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             ui.add_space(6.0);
+            ui.label(egui::RichText::new(PASSPHRASE_RULE).small().weak());
+            ui.add_space(4.0);
             let go = ui.add_enabled(!busy && self.passphrase.trim().len() >= 8, egui::Button::new("Join"));
             if busy {
                 ui.spinner();

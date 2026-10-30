@@ -125,7 +125,7 @@ async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
     if opts.lan {
         let n = node.clone();
         let port = opts.lan_port;
-        supervise("lan", move || lan::run(n.clone(), port));
+        supervise(node.clone(), "lan", move || lan::run(n.clone(), port));
     }
     if opts.ble {
         spawn_ble(node.clone());
@@ -142,7 +142,8 @@ async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
 /// Keeps a transport running: restarts it 10 s after it fails, backing off
 /// to once a minute while it keeps failing the same way (no adapter on this
 /// machine), and warns once per distinct error rather than every retry.
-fn supervise<F, Fut>(name: &'static str, start: F)
+/// A transport that has kept running for a few seconds counts as up.
+fn supervise<F, Fut>(node: Arc<Node>, name: &'static str, start: F)
 where
     F: Fn() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send,
@@ -150,7 +151,17 @@ where
     tokio::spawn(async move {
         let mut last = String::new();
         loop {
-            let err = match start().await {
+            let run = start();
+            tokio::pin!(run);
+            let r = tokio::select! {
+                r = &mut run => r,
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                    node.set_transport(name, true);
+                    run.await
+                }
+            };
+            node.set_transport(name, false);
+            let err = match r {
                 Ok(()) => String::from("stopped"),
                 Err(e) => format!("{e:#}"),
             };
@@ -169,12 +180,12 @@ where
 
 #[cfg(target_os = "linux")]
 fn spawn_ble(node: Arc<Node>) {
-    supervise("ble", move || crate::ble_linux::run(node.clone()));
+    supervise(node.clone(), "ble", move || crate::ble_linux::run(node.clone()));
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn spawn_ble(node: Arc<Node>) {
-    supervise("ble", move || crate::ble_central::run(node.clone()));
+    supervise(node.clone(), "ble", move || crate::ble_central::run(node.clone()));
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

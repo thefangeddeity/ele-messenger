@@ -31,6 +31,9 @@ pub struct Status {
     pub version: String,
     #[serde(default)]
     pub name: String,
+    /// Transports running on this machine; absent from older services.
+    #[serde(default)]
+    pub transports: Option<Vec<String>>,
     #[serde(default)]
     pub links: Vec<Link>,
     #[serde(default)]

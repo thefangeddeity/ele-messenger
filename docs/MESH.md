@@ -38,7 +38,7 @@ Local API, bound to `127.0.0.1` only:
 | `POST /v1/rooms/{room}/messages` `{"nick","text"}` | append a message authored by this node |
 | `GET /v1/rooms/{room}/messages?after={cursor}` | messages in display order after a cursor |
 | `GET /v1/rooms` | rooms seen on the mesh |
-| `GET /v1/status` | node id, links (transport, peer, age), store size |
+| `GET /v1/status` | node id, name, transports running here, links (transport, peer, age), store size |
 
 The CLI (`elemesh send`, `elemesh tail`, `elemesh status`) wraps the same
 calls.

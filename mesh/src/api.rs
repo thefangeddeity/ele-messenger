@@ -164,6 +164,7 @@ async fn status(State(node): State<Arc<Node>>, v: Option<Extension<Visitor>>) ->
         "visitor": v.is_some(),
         "joined": !node.scout,
         "entries": entries,
+        "transports": node.transports(),
         "links": node.links(),
         "nearby": node.nearby(),
     }))

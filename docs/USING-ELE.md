@@ -13,9 +13,8 @@ it can read every room.
    Windows and Mac installers are coming, so for now ask whoever looks
    after your computers.
 2. Open the **ELE Messenger** app.
-3. It lists the ELE computers it can hear. Type the mesh passphrase and click
-   **Join**. Every computer uses the same one. Anyone who has it can
-   read your messages, so keep it private.
+3. Type the mesh passphrase (at least 8 characters; capitals count) and
+   click **Join**. Every computer uses the same one; keep it private.
 
 ## Everyday use
 
@@ -24,17 +23,18 @@ it can read every room.
 - Pick a **Room**. Everyone in the same room sees the same messages; "home"
   is the usual one.
 - Type and press Enter. Leave **Name** empty to sign with the computer's name.
-- **Around you** lists nearby ELE computers, grouped by how well each is
-  connected: full, partial, internet only, then heard but not linked (a
-  different passphrase, or still connecting). A green dot means linked.
-- The **☰** menu renames the computer, changes the passphrase, clears a room
-  (for you, or for everyone) and switches light or dark. To delete one of
-  your own messages, right-click it in the app, or hover over it on the page.
+- **Around you** groups nearby ELE computers by connection: full, partial,
+  internet only, then heard but not linked (a different passphrase, or
+  still connecting).
+- The **☰** menu renames the computer, changes its passphrase (this
+  computer only: do it on each one), clears a room and switches light or
+  dark. To delete your own message, right-click it in the app, or hover over
+  it on the page.
 
 ## On a phone or tablet
 
 Open the computer's address with `/elem/` on the end, e.g.
-`https://tanzania.<your tailnet>.ts.net/elem/`, and type the mesh passphrase.
+`https://<computer>.<your tailnet>.ts.net/elem/`, and type the mesh passphrase.
 Or, on the computer, use ☰ → **Copy invite link** and send that to the
 phone: it works once, for a day, without giving out the passphrase.
 
@@ -52,5 +52,5 @@ phone: it works once, for a day, without giving out the passphrase.
 ## Good to know
 
 - Messages are kept for 7 days.
-- Messages travel directly between your computers, scrambled so that only
-  computers with your passphrase can read them.
+- Messages travel directly between your computers, readable only with your
+  passphrase.
