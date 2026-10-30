@@ -110,7 +110,7 @@ never show them. Retention prunes them with everything else after 7 days.
 
 A phone or a browser can't run the mesh (no Bluetooth, no listening
 sockets). A machine can share its mesh page instead, through its own web
-server as `/elem/` (nginx snippet in `mesh/dist/nginx/`, or
+server as `/elem/` (nginx snippet in `dist/nginx/`, or
 `tailscale serve --set-path /elem`). elemesh itself still binds 127.0.0.1
 only.
 

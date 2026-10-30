@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ELE Messenger
+GenericName=Mesh messenger
+Comment=Chat with the ELE machines around you, no internet needed
+Exec=ele
+Icon=ele
+Type=Application
+Categories=Network;InstantMessaging;

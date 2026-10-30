@@ -48,13 +48,23 @@ the top builds both into `target/release/`.
 
 ## Install
 
-One name on every system: **ELE Messenger**.
+One name and one icon on every system: **ELE Messenger**, the app, plus
+the mesh service that keeps running when the app is closed. Each release
+on GitHub carries the files below.
 
-- **Arch Linux:** `yay -S ele-messenger` (the app and the mesh service), then
+- **Arch Linux:** `yay -S ele-messenger`, then
   `systemctl --user enable --now elemesh` once.
-- **macOS:** `mesh/dist/macos/install.sh` sets the service up as an app; an
-  installer for the whole thing is next.
-- **Windows:** build from source for now; an installer is next.
+- **Debian / Ubuntu (24.04 and later):** `sudo apt install ./ele-messenger_<version>_amd64.deb`,
+  then `systemctl --user enable --now elemesh` once.
+- **macOS:** from a build, `sh dist/macos/install.sh` puts **ELE Messenger**
+  and the **ELE Mesh** service in `~/Applications`; the service starts at login.
+- **Windows:** unzip `ELE-Messenger-<version>-windows.zip` and run
+  `powershell -ExecutionPolicy Bypass -File install.ps1`: ELE Messenger
+  appears in the Start menu and the service starts at sign-in.
+
+Every Linux package lays out the same files (`dist/linux/install-tree.sh`);
+`dist/linux/Containerfile.deb` and `dist/windows/Containerfile` build the
+.deb and the Windows zip on any Linux machine with podman.
 
 Then open ELE Messenger, or http://127.0.0.1:8740 in a browser on that
 computer, and enter the mesh passphrase.

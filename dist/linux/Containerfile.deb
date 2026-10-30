@@ -1,0 +1,14 @@
+# Builds the .deb on the oldest Ubuntu LTS we support, so its binaries run
+# on that release and every later one.
+#   podman build -f dist/linux/Containerfile.deb -o out .
+FROM docker.io/library/ubuntu:24.04 AS build
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl build-essential pkg-config libdbus-1-dev \
+    && curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH=/root/.cargo/bin:$PATH
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked && sh dist/linux/build-deb.sh && mkdir /out && mv ele-messenger_*.deb /out/
+
+FROM scratch
+COPY --from=build /out/ /

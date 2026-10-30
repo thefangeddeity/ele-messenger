@@ -1,0 +1,17 @@
+# Cross-builds the Windows release on Linux and packs it with the installer.
+#   podman build -f dist/windows/Containerfile -o out .
+FROM docker.io/library/rust:1-bookworm AS build
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        gcc-mingw-w64-x86-64 zip \
+    && rustup target add x86_64-pc-windows-gnu
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked --target x86_64-pc-windows-gnu \
+    && v=$(sed -n 's/^version = "\(.*\)"/\1/p' mesh/Cargo.toml | head -1) \
+    && d="ELE-Messenger-$v-windows" && mkdir "$d" \
+    && cp target/x86_64-pc-windows-gnu/release/ele.exe target/x86_64-pc-windows-gnu/release/elemesh.exe \
+          dist/windows/ele.ico dist/windows/install.ps1 dist/windows/uninstall.ps1 docs/USING-ELE.md "$d"/ \
+    && mkdir /out && zip -r "/out/$d.zip" "$d"
+
+FROM scratch
+COPY --from=build /out/ /

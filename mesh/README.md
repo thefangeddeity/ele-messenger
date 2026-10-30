@@ -43,7 +43,7 @@ The commands below run from the same place.
 
 ```sh
 install -Dm755 target/release/elemesh ~/.local/bin/elemesh
-install -Dm644 mesh/dist/linux/elemesh.service ~/.config/systemd/user/elemesh.service
+install -Dm644 dist/linux/elemesh.service ~/.config/systemd/user/elemesh.service
 systemctl --user daemon-reload
 ```
 
@@ -88,7 +88,7 @@ sudo loginctl enable-linger $USER
 **macOS**
 
 ```sh
-sh mesh/dist/macos/install.sh target/release/elemesh
+sh dist/macos/install.sh target/release/elemesh
 ```
 
 The first time, macOS asks whether **ELE Mesh** may use Bluetooth: click
@@ -161,7 +161,7 @@ ever listens on 127.0.0.1; the web server is the one way in.
 Rebuild, then:
 
 - **Linux**: `install -Dm755 target/release/elemesh ~/.local/bin/elemesh && systemctl --user restart elemesh`
-- **macOS**: `sh mesh/dist/macos/install.sh target/release/elemesh && cp target/release/elemesh ~/.local/bin/`
+- **macOS**: `sh dist/macos/install.sh target/release/elemesh && cp target/release/elemesh ~/.local/bin/`
   (no new Bluetooth prompt)
 
 ## 8. Troubleshooting
