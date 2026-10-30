@@ -24,7 +24,9 @@ it can read every room.
 - Pick a **Room**. Everyone in the same room sees the same messages; "home"
   is the usual one.
 - Type and press Enter. Leave **Name** empty to sign with the computer's name.
-- **Around you** lists nearby ELE computers. A green dot means connected.
+- **Around you** lists nearby ELE computers, grouped by how well each is
+  connected: full, partial, internet only, then heard but not linked (a
+  different passphrase, or still connecting). A green dot means linked.
 - The **☰** menu renames the computer, changes the passphrase, clears a room
   (for you, or for everyone) and switches light or dark. To delete one of
   your own messages, right-click it in the app, or hover over it on the page.

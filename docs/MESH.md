@@ -179,7 +179,10 @@ larger than the link allows (BLE: MTU − 3 bytes, default 182).
 
 ## Not in this step
 
-The tailnet transport (next), media, private 1:1 encryption beyond the mesh
+The tailnet transport (next); pairing a heard machine into the mesh (both
+screens show one 6-digit code, the passphrase crosses over a PAKE, nothing
+but "wants to join" ever travels unauthenticated, and a machine without the
+passphrase is never sent content); media, private 1:1 encryption beyond the mesh
 PSK, password-protected rooms, couriers (BitChat §6.2),
 macOS/Windows peripheral role, iOS/Android.
 

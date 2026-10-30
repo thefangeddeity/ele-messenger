@@ -308,14 +308,44 @@ fn machines(st: &Status) -> Vec<Machine> {
         }
     }
     let mut out: Vec<Machine> = by.into_values().collect();
-    out.sort_by_key(|m| (m.linked.is_empty(), m.seen_s));
+    for m in &mut out {
+        m.linked.sort_by_key(|t| transport_rank(t));
+        m.linked.dedup();
+        m.heard.sort_by_key(|t| transport_rank(t));
+        m.heard.dedup();
+    }
+    out.sort_by_cached_key(|m| (m.tier(), m.name.clone().or(m.id.clone()).unwrap_or_default().to_lowercase(), m.id.clone()));
     out
+}
+
+/// Headings for [`Machine::tier`]; the two partial ranks share one.
+const TIERS: [&str; 5] = ["Full mesh access", "Partial mesh access", "Partial mesh access", "Internet only", "Heard, not linked"];
+
+impl Machine {
+    /// Groups by mesh access, never by time, so a row only moves when a
+    /// machine gains or loses a link. Partial access ranks Bluetooth above
+    /// Wi-Fi/LAN: it is the link that outlasts the power and the router.
+    fn tier(&self) -> usize {
+        let has = |t: &str| self.linked.iter().any(|l| l == t);
+        match (self.linked.is_empty(), has("ble"), has("lan")) {
+            (true, _, _) => 4,
+            (_, true, true) => 0,
+            (_, true, false) => 1,
+            (_, false, true) => 2,
+            _ => 3,
+        }
+    }
+}
+
+fn transport_rank(t: &str) -> usize {
+    ["lan", "ble", "tailnet"].iter().position(|x| *x == t).unwrap_or(3)
 }
 
 fn transport_name(t: &str) -> &str {
     match t {
         "ble" => "Bluetooth",
         "lan" => "Wi-Fi/LAN",
+        "tailnet" => "tailnet",
         other => other,
     }
 }
@@ -392,7 +422,7 @@ impl App {
     fn around(&self, ui: &mut egui::Ui, mode: Mode, list: &[Machine]) {
         ui.add_space(4.0);
         ui.strong("Around you: ELE Mesh");
-        ui.label(egui::RichText::new("Machines heard nearby. Linked ones share messages now.").small().weak());
+        ui.label(egui::RichText::new("Machines heard nearby. Linked ones share messages.").small().weak());
         ui.add_space(4.0);
         if list.is_empty() {
             ui.horizontal(|ui| {
@@ -400,7 +430,14 @@ impl App {
                 ui.label(if mode == Mode::Starting { "Starting…" } else { "No ELE machines around yet. Listening over Bluetooth and Wi-Fi…" });
             });
         }
+        let mut heading = None;
         for m in list {
+            let tier = TIERS[m.tier()];
+            if heading != Some(tier) {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tier).small().strong().weak());
+                heading = Some(tier);
+            }
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -415,14 +452,11 @@ impl App {
                         ui.label(egui::RichText::new(id).small().weak());
                     }
                 });
-                let mut ts: Vec<&str> = m.linked.iter().map(|t| transport_name(t)).collect();
-                ts.dedup();
+                let names = |ts: &[String]| ts.iter().map(|t| transport_name(t)).collect::<Vec<_>>().join(", ");
                 let line = if m.linked.is_empty() {
-                    let mut h: Vec<&str> = m.heard.iter().map(|t| transport_name(t)).collect();
-                    h.dedup();
-                    format!("heard over {} · {} s ago", h.join(", "), m.seen_s)
+                    format!("heard over {}: different passphrase, or still connecting · {} s ago", names(&m.heard), m.seen_s)
                 } else {
-                    format!("linked over {} · {} s ago", ts.join(", "), m.seen_s)
+                    format!("{} · {} s ago", names(&m.linked), m.seen_s)
                 };
                 ui.label(egui::RichText::new(line).small());
             });
