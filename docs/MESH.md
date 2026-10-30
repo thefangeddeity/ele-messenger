@@ -91,6 +91,22 @@ read traffic, or inject entries. Two households with different passphrases
 share the air but not the mesh. A neighbour joins by being given the
 passphrase: no server, no enrolment.
 
+## Signatures: who wrote it
+
+The passphrase decides who may link; it does not say who wrote a message.
+Every entry is therefore signed by its author with the node's own X25519
+identity key (XEdDSA, as Signal specifies it). The node id is the hash of
+that key, so a signature proves itself: any node can check it against the
+key it carries, whoever relayed it, with no key exchange.
+
+- Signatures travel in a `Sigs` frame just before the `Entries` frame they
+  cover, last in the wire enum, so an older node drops only that frame and
+  keeps working.
+- A bad signature is refused. Once a node has seen an author sign, it
+  refuses unsigned entries in that author's name from that seq on.
+- Unsigned entries from authors not yet known to sign (older versions) are
+  still accepted, and the API marks every message `signed` or not.
+
 ## Deletes and clears
 
 The log is append-only and replicated, so removing a message is itself an

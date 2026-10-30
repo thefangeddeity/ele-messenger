@@ -26,6 +26,21 @@ pub enum Wire {
     /// The sender's machine name, sent once a link is up. Last, so nodes that
     /// predate it only drop this one frame.
     Name(String),
+    /// Signatures for the entries in the next Entries frame on this link.
+    /// After Name for the same reason: an older node drops only this frame
+    /// and takes the entries unsigned.
+    Sigs(Vec<Signed>),
+}
+
+/// An entry's signature, with its author's identity key so any node can
+/// check it: the key must hash to the author's id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Signed {
+    pub author: NodeId,
+    pub seq: u64,
+    pub key: [u8; 32],
+    /// 64 bytes (serde has no 64-byte arrays); anything else fails to verify.
+    pub sig: Vec<u8>,
 }
 
 impl Wire {

@@ -66,6 +66,8 @@ pub struct StoredEntry {
     /// Set on control entries, which clients apply rather than show.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub control: Option<Control>,
+    /// Carries a valid signature from its author.
+    pub signed: bool,
 }
 
 pub struct Store {
@@ -107,6 +109,17 @@ impl Store {
              CREATE TABLE IF NOT EXISTS cleared (
                  room TEXT PRIMARY KEY,
                  before_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sigs (
+                 author BLOB NOT NULL,
+                 seq INTEGER NOT NULL,
+                 key BLOB NOT NULL,
+                 sig BLOB NOT NULL,
+                 PRIMARY KEY (author, seq)
+             );
+             CREATE TABLE IF NOT EXISTS signers (
+                 author BLOB PRIMARY KEY,
+                 first_seq INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS cleared_here (
                  room TEXT PRIMARY KEY,
@@ -268,7 +281,8 @@ impl Store {
     /// entries are included so a client following the room can apply them.
     pub fn messages(&self, room: &str, after: i64, limit: u32) -> Result<Vec<StoredEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.rowid, e.author, e.seq, e.ts_ms, e.room, e.nick, e.text FROM entries e
+            "SELECT e.rowid, e.author, e.seq, e.ts_ms, e.room, e.nick, e.text,
+                    EXISTS (SELECT 1 FROM sigs s WHERE s.author = e.author AND s.seq = e.seq) FROM entries e
              WHERE e.room = ?1 AND e.rowid > ?2
                AND NOT EXISTS (SELECT 1 FROM deleted d WHERE d.author = e.author AND d.seq = e.seq)
                AND (instr(e.text, ?4) = 1 OR NOT EXISTS (
@@ -289,9 +303,50 @@ impl Store {
                 nick: r.get(5)?,
                 control: Control::parse(&text),
                 text,
+                signed: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Keeps a verified signature, and remembers that its author signs from
+    /// this seq on: later unsigned entries in its name are forgeries.
+    pub fn put_sig(&self, s: &crate::proto::Signed) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO sigs (author, seq, key, sig) VALUES (?1, ?2, ?3, ?4)",
+            params![&s.author[..], s.seq as i64, &s.key[..], &s.sig[..]],
+        )?;
+        self.conn.execute(
+            "INSERT INTO signers (author, first_seq) VALUES (?1, ?2)
+             ON CONFLICT(author) DO UPDATE SET first_seq = MIN(first_seq, excluded.first_seq)",
+            params![&s.author[..], s.seq as i64],
+        )?;
+        Ok(())
+    }
+
+    /// The first seq from which `author` is known to sign.
+    pub fn signs_from(&self, author: &crate::proto::NodeId) -> Result<Option<u64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT first_seq FROM signers WHERE author = ?1", params![&author[..]], |r| r.get::<_, i64>(0))
+            .optional()?
+            .map(|v| v as u64))
+    }
+
+    /// Stored signatures for these entries, to send alongside them.
+    pub fn sigs_for(&self, entries: &[Entry]) -> Result<Vec<crate::proto::Signed>> {
+        let mut stmt = self.conn.prepare_cached("SELECT key, sig FROM sigs WHERE author = ?1 AND seq = ?2")?;
+        let mut out = Vec::new();
+        for e in entries {
+            let row: Option<(Vec<u8>, Vec<u8>)> =
+                stmt.query_row(params![&e.author[..], e.seq as i64], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+            if let Some((k, s)) = row {
+                if let Ok(key) = k.try_into() {
+                    out.push(crate::proto::Signed { author: e.author, seq: e.seq, key, sig: s });
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn rooms(&self) -> Result<Vec<String>> {

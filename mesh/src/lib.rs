@@ -17,4 +17,5 @@ mod lan;
 mod link;
 mod node;
 mod proto;
+mod sign;
 mod store;

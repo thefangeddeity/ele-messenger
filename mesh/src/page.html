@@ -166,7 +166,9 @@
 <script>
 const $ = id => document.getElementById(id);
 // Where the API lives: next to this page, so it works at / and at /elem/.
-const API = location.pathname.replace(/[^/]*$/, "");
+// A share mounted at /elem may be opened without the slash (Tailscale serve
+// doesn't add one); a last segment with no dot is the mount, not a file.
+const API = /\/[^/.]+$/.test(location.pathname) ? location.pathname + "/" : location.pathname.replace(/[^/]*$/, "");
 const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set(k,v){ try { localStorage.setItem(k,v); } catch {} } };
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };

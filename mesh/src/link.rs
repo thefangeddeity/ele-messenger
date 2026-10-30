@@ -198,6 +198,38 @@ mod tests {
         assert!(own.ts_ms >= kept.ts_ms);
     }
 
+    // Signatures travel with entries through a relay, and once a node knows
+    // an author signs, nothing in that author's name gets in without a
+    // valid signature: not a tampered one, not an unsigned one.
+    #[tokio::test]
+    async fn signatures_relay_and_forgeries_are_refused() {
+        let (a, m, c) = (node("same passphrase"), node("same passphrase"), node("same passphrase"));
+        let (x1, x2) = tokio::io::duplex(64 * 1024);
+        let (y1, y2) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(run(x1, true, "test", "a-m".into(), a.clone()));
+        tokio::spawn(run(x2, false, "test", "m-a".into(), m.clone()));
+        tokio::spawn(run(y1, true, "test", "m-c".into(), m.clone()));
+        tokio::spawn(run(y2, false, "test", "c-m".into(), c.clone()));
+        assert!(settle(|| a.links().len() == 1 && c.links().len() == 1).await);
+        let real = a.post("home", "a", "really from a", None).unwrap();
+        assert!(settle(|| count(&c) == 1).await, "the message should relay to c");
+        let at_c = c.with_store(|s| s.messages("home", 0, 10)).unwrap();
+        assert!(at_c[0].signed, "it should arrive signed, through the middle node");
+
+        let forged = Entry { seq: real.seq + 1, text: "not from a".into(), ..real.clone() };
+        c.handle(999, Wire::Entries { ttl: 1, entries: vec![forged.clone()] });
+        let mut sig = a.with_store(|s| s.sigs_for(&[real.clone()])).unwrap();
+        sig[0].seq = forged.seq;
+        c.handle(999, Wire::Sigs(sig));
+        c.handle(999, Wire::Entries { ttl: 1, entries: vec![forged] });
+        assert_eq!(count(&c), 1, "unsigned and mis-signed entries in a's name must be refused");
+
+        // Someone not yet known to sign (an older version) is still heard.
+        let old = Entry { author: [9; 8], seq: 1, ts_ms: now_ms(), room: "home".into(), nick: "old".into(), text: "hi".into() };
+        c.handle(999, Wire::Entries { ttl: 1, entries: vec![old] });
+        assert_eq!(count(&c), 2);
+    }
+
     #[tokio::test]
     async fn history_syncs_both_ways_on_link_up() {
         let (a, b) = (node("same passphrase"), node("same passphrase"));

@@ -92,6 +92,8 @@ pub struct Node {
     /// Transports this machine has running now (no Bluetooth adapter: no
     /// "ble"), so clients can tell a link from as good as it gets here.
     transports: Mutex<BTreeSet<&'static str>>,
+    /// Signatures a link sent for the entries in its next Entries frame.
+    pending_sigs: Mutex<HashMap<u64, Vec<crate::proto::Signed>>>,
 }
 
 enum Dial {
@@ -118,6 +120,7 @@ impl Node {
             names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
             transports: Default::default(),
+            pending_sigs: Default::default(),
         }
     }
 
@@ -237,6 +240,7 @@ impl Node {
 
     pub fn remove_link(&self, id: u64) {
         self.links.lock().unwrap().remove(&id);
+        self.pending_sigs.lock().unwrap().remove(&id);
     }
 
     pub fn links(&self) -> Vec<LinkStatus> {
@@ -278,9 +282,51 @@ impl Node {
         }
     }
 
+    /// Entries go with their signatures, in the frame just before them.
     fn send_entries(&self, link: u64, ttl: u8, entries: Vec<Entry>) {
         for batch in batches(entries) {
+            let sigs = self.with_store(|s| s.sigs_for(&batch)).unwrap_or_default();
+            if !sigs.is_empty() {
+                self.send(link, &Wire::Sigs(sigs));
+            }
             self.send(link, &Wire::Entries { ttl, entries: batch });
+        }
+    }
+
+    fn broadcast_entries(&self, except: Option<u64>, ttl: u8, entries: Vec<Entry>) {
+        for batch in batches(entries) {
+            let sigs = self.with_store(|s| s.sigs_for(&batch)).unwrap_or_default();
+            if !sigs.is_empty() {
+                self.broadcast(except, &Wire::Sigs(sigs));
+            }
+            self.broadcast(except, &Wire::Entries { ttl, entries: batch });
+        }
+    }
+
+    /// Whether to take an entry, and its signature if it has a valid one. A
+    /// bad signature is refused; so is an unsigned entry in the name of an
+    /// author who signs from an earlier seq. Unsigned entries from authors
+    /// not yet known to sign (older versions) are still taken.
+    fn vet(&self, e: &Entry, sigs: &[crate::proto::Signed]) -> Option<Option<crate::proto::Signed>> {
+        let sig = sigs.iter().find(|s| s.author == e.author && s.seq == e.seq);
+        match sig {
+            Some(s) => {
+                let ok = crate::sign::key_of(&e.author, &s.key)
+                    && <&[u8; 64]>::try_from(s.sig.as_slice()).is_ok_and(|sig| {
+                        postcard::to_stdvec(e).is_ok_and(|m| crate::sign::verify(&s.key, &m, sig))
+                    });
+                if ok { Some(Some(s.clone())) } else {
+                    tracing::warn!("dropping entry {}/{} with a bad signature", hex::encode(e.author), e.seq);
+                    None
+                }
+            }
+            None => match self.with_store(|st| st.signs_from(&e.author)).ok().flatten() {
+                Some(from) if e.seq >= from => {
+                    tracing::warn!("dropping unsigned entry {}/{} from an author who signs", hex::encode(e.author), e.seq);
+                    None
+                }
+                _ => Some(None),
+            },
         }
     }
 
@@ -322,12 +368,27 @@ impl Node {
                     self.send_entries(link, 1, missing);
                 }
             }
+            Wire::Sigs(sigs) => {
+                self.pending_sigs.lock().unwrap().insert(link, sigs);
+            }
             Wire::Entries { ttl, entries } => {
                 let received = now_ms();
+                let sigs = self.pending_sigs.lock().unwrap().remove(&link).unwrap_or_default();
                 let fresh: Vec<Entry> = entries
                     .into_iter()
                     .filter(|e| e.is_well_formed())
-                    .filter(|e| self.with_store(|s| s.insert(e, received)).unwrap_or(false))
+                    .filter_map(|e| self.vet(&e, &sigs).map(|s| (e, s)))
+                    .filter(|(e, s)| {
+                        self.with_store(|st| {
+                            let new = st.insert(e, received)?;
+                            if let Some(s) = s.as_ref().filter(|_| new) {
+                                st.put_sig(s)?;
+                            }
+                            Ok(new)
+                        })
+                        .unwrap_or(false)
+                    })
+                    .map(|(e, _)| e)
                     .collect();
                 if fresh.is_empty() {
                     return;
@@ -338,9 +399,7 @@ impl Node {
                     let node = self.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(jitter).await;
-                        for batch in batches(fresh) {
-                            node.broadcast(Some(link), &Wire::Entries { ttl: ttl - 1, entries: batch });
-                        }
+                        node.broadcast_entries(Some(link), ttl - 1, fresh);
                     });
                 }
             }
@@ -378,11 +437,18 @@ impl Node {
             // of when it was said. Local arrival drives the replication
             // cursor; it is not the message's timestamp and never was.
             s.insert(&e, now)?;
+            s.put_sig(&self.sign_entry(&e)?)?;
             Ok(e)
         })?;
         self.changed.notify_waiters();
-        self.broadcast(None, &Wire::Entries { ttl: DEFAULT_TTL, entries: vec![entry.clone()] });
+        self.broadcast_entries(None, DEFAULT_TTL, vec![entry.clone()]);
         Ok(entry)
+    }
+
+    fn sign_entry(&self, e: &Entry) -> Result<crate::proto::Signed> {
+        let private: [u8; 32] = self.identity.private.as_slice().try_into()?;
+        let key: [u8; 32] = self.identity.public.as_slice().try_into()?;
+        Ok(crate::proto::Signed { author: e.author, seq: e.seq, key, sig: crate::sign::sign(&private, &postcard::to_stdvec(e)?).to_vec() })
     }
 
     /// Deletes one of this node's own messages on every node.
