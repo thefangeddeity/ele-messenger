@@ -1632,7 +1632,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "ele-client"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1649,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "elemesh"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "argon2",

@@ -91,6 +91,7 @@
     passphrase reads every room.</p>
 </header>
 <div id="menu" hidden>
+  <div class="hint" id="m-visitor" hidden>This computer's name and passphrase are changed on the computer itself.</div>
   <div id="m-machine">
   <h3>This machine</h3>
   <div class="hint" id="m-id"></div>
@@ -316,6 +317,7 @@ async function status() {
     const s = await res.json();
     visitor = !!s.visitor;
     for (const id of ["m-machine", "m-pass-block", "m-clear-me"]) { const e = $(id); if (e) e.hidden = visitor; }
+    $("m-visitor").hidden = !visitor;
     me = s.node;
     const joined = s.joined !== false;
     $("mode").textContent = joined ? "joined" : "not joined";
