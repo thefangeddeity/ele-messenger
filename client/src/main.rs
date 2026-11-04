@@ -409,9 +409,19 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 // The menu holds text fields (name, passphrase); egui's default
                 // closes a menu on any click, including a click into a field.
-                let menu = egui::containers::menu::MenuButton::new("☰")
+                // The icon is drawn, not typed: the built-in fonts have no ☰.
+                let size = egui::vec2(ui.spacing().interact_size.y * 1.2, ui.spacing().interact_size.y);
+                let menu = egui::containers::menu::MenuButton::from_button(egui::Button::new("").min_size(size))
                     .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
-                menu.ui(ui, |ui| self.menu(ui, status.as_ref())).0.on_hover_text("Menu");
+                let button = menu.ui(ui, |ui| self.menu(ui, status.as_ref())).0;
+                let stroke = egui::Stroke::new(1.5, ui.style().interact(&button).fg_stroke.color);
+                let c = button.rect.center();
+                let w = size.y * 0.32;
+                for dy in [-0.22, 0.0, 0.22] {
+                    let y = c.y + dy * size.y;
+                    ui.painter().line_segment([egui::pos2(c.x - w, y), egui::pos2(c.x + w, y)], stroke);
+                }
+                button.on_hover_text("Menu");
                 ui.heading("ELE Mesh");
                 let joined = status.as_ref().map(|s| s.joined).unwrap_or(true);
                 let (chip, tip) = match mode {
