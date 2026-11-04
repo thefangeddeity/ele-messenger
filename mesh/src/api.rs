@@ -187,7 +187,15 @@ fn sessions() -> &'static Mutex<HashSet<String>> {
 /// How long an invite link works.
 const INVITE_FOR: Duration = Duration::from_secs(24 * 3600);
 /// How long a visiting device stays signed in.
-const SESSION_MAX_AGE_S: u64 = 30 * 24 * 3600;
+///
+/// Was thirty days, which is not a session, it is a tenancy. The passphrase
+/// is typed on whatever is to hand -- a phone, a shared machine in the hall
+/// -- and until /v1/logout existed there was no way at all to end one early:
+/// the cookie is HttpOnly so a page cannot clear it, and nothing removed the
+/// token from `sessions()` short of restarting the mesh. A week is long
+/// enough that nobody in the house retypes it often and short enough that a
+/// device that walks away stops mattering on its own.
+const SESSION_MAX_AGE_S: u64 = 7 * 24 * 3600;
 
 /// Invite tokens and when each stops working. One device each.
 fn invites() -> &'static Mutex<HashMap<String, std::time::Instant>> {
@@ -231,7 +239,11 @@ async fn gate(mut req: Request, next: Next) -> Response {
         return StatusCode::FORBIDDEN.into_response();
     }
     let path = req.uri().path();
-    if path == "/" || path == "/v1/login" || path == "/v1/ping" {
+    // Logout is open on purpose. Signing out when you are already signed
+    // out should be a quiet success, not a 401 the caller has to special-case
+    // -- and it can do nothing harmful: it only ever forgets a token the
+    // caller already presented.
+    if path == "/" || path == "/v1/login" || path == "/v1/ping" || path == "/v1/logout" {
         return next.run(req).await;
     }
     let signed_in = session_of(&req).is_some_and(|t| sessions().lock().unwrap().contains(&t));
@@ -275,6 +287,27 @@ async fn login(State(node): State<Arc<Node>>, Json(l): Json<Login>) -> Response 
     ([(header::SET_COOKIE, cookie)], Json(json!({ "signed_in": true }))).into_response()
 }
 
+/// Signs this device out again.
+///
+/// BOTH HALVES, or it is theatre. Expiring the cookie only stops THIS browser
+/// sending the token; the token stayed in `sessions()` and anyone holding a
+/// copy kept the run of the mesh until the process restarted. Forgetting it
+/// server-side is the half that actually revokes.
+///
+/// Idempotent, and deliberately says nothing about whether the token it was
+/// given was real: a caller learning "that was a valid session" from a logout
+/// is a probe, and there is nothing useful to tell them either way.
+async fn logout(req: Request) -> Response {
+    if let Some(t) = session_of(&req) {
+        sessions().lock().unwrap().remove(&t);
+    }
+    // Max-Age=0 with the SAME attributes the cookie was set with. A browser
+    // matches a replacement on name, path and domain, so a Set-Cookie that
+    // differs in Path would add a second cookie rather than clear the first.
+    let cookie = format!("{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    ([(header::SET_COOKIE, cookie)], Json(json!({ "signed_out": true }))).into_response()
+}
+
 /// Makes an invite: a token that lets one more device in for a day, so a
 /// link can be shared without sharing the passphrase.
 async fn invite(State(node): State<Arc<Node>>) -> Response {
@@ -304,6 +337,7 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/name", axum::routing::put(set_name))
         .route("/v1/passphrase", axum::routing::post(set_passphrase))
         .route("/v1/login", axum::routing::post(login))
+        .route("/v1/logout", axum::routing::post(logout))
         .route("/v1/ping", get(ping))
         .route("/v1/invite", axum::routing::post(invite))
         .layer(middleware::from_fn(gate))
