@@ -194,7 +194,7 @@ const INVITE_FOR: Duration = Duration::from_secs(24 * 3600);
 /// is typed on whatever is to hand -- a phone, a shared machine in the hall
 /// -- and until /v1/logout existed there was no way at all to end one early:
 /// the cookie is HttpOnly so a page cannot clear it, and nothing removed the
-/// token from `sessions()` short of restarting the mesh. A week is long
+/// token from the store short of it expiring. A week is long
 /// enough that nobody in the house retypes it often and short enough that a
 /// device that walks away stops mattering on its own.
 const SESSION_MAX_AGE_S: u64 = 7 * 24 * 3600;
@@ -296,16 +296,16 @@ async fn login(State(node): State<Arc<Node>>, Json(l): Json<Login>) -> Response 
 /// Signs this device out again.
 ///
 /// BOTH HALVES, or it is theatre. Expiring the cookie only stops THIS browser
-/// sending the token; the token stayed in `sessions()` and anyone holding a
-/// copy kept the run of the mesh until the process restarted. Forgetting it
+/// sending the token; the token stayed stored and anyone holding a
+/// copy kept the run of the mesh until it expired. Forgetting it
 /// server-side is the half that actually revokes.
 ///
 /// Idempotent, and deliberately says nothing about whether the token it was
 /// given was real: a caller learning "that was a valid session" from a logout
 /// is a probe, and there is nothing useful to tell them either way.
-async fn logout(req: Request) -> Response {
+async fn logout(State(node): State<Arc<Node>>, req: Request) -> Response {
     if let Some(t) = session_of(&req) {
-        sessions().lock().unwrap().remove(&t);
+        let _ = node.with_store(|s| s.remove_session(&session_key(&node, &t)));
     }
     // Max-Age=0 with the SAME attributes the cookie was set with. A browser
     // matches a replacement on name, path and domain, so a Set-Cookie that

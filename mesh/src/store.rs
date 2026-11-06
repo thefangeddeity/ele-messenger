@@ -336,6 +336,11 @@ impl Store {
         Ok(())
     }
 
+    pub fn remove_session(&self, key: &[u8]) -> Result<()> {
+        self.conn.execute("DELETE FROM sessions WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     pub fn has_session(&self, key: &[u8], now_ms: u64) -> Result<bool> {
         Ok(self
             .conn
