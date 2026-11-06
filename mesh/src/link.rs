@@ -382,6 +382,20 @@ mod tests {
         assert_eq!(n.post("home", "alex", "hi", None).unwrap().nick, "alex");
     }
 
+    #[test]
+    fn a_nameless_address_is_known_once_a_link_proves_it() {
+        let n = Node::new(Identity::generate().unwrap(), derive_psk("same passphrase").unwrap(), Store::in_memory().unwrap());
+        let peer = Identity::generate().unwrap().id;
+        assert_eq!(n.heard(None, "ble", "AA:BB".into()), None);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        n.add_link(peer, false, "ble", "AA:BB".into(), tx).unwrap();
+        let near = n.nearby();
+        assert_eq!(near.len(), 1, "the nameless entry became the machine");
+        assert_eq!(near[0].peer, Some(hex::encode(peer)));
+        assert_eq!(n.heard(None, "ble", "AA:BB".into()), Some(peer));
+        assert_eq!(n.nearby().len(), 1);
+    }
+
     #[tokio::test]
     async fn a_scout_sees_nodes_but_never_links() {
         let a = node("our household");

@@ -209,9 +209,9 @@ impl App {
         let joined = status.map(|s| s.joined).unwrap_or(false);
         ui.set_min_width(300.0);
 
-        ui.strong("This machine");
+        let heading = ui.strong("This machine");
         if let Some(st) = status {
-            ui.label(egui::RichText::new(format!("id {}", short(&st.node))).small().weak());
+            heading.on_hover_text(format!("machine id {}", short(&st.node)));
         }
         ui.horizontal(|ui| {
             let hint = status.map(|s| s.name.clone()).unwrap_or_default();

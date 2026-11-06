@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -179,9 +179,11 @@ struct Visitor;
 
 const SESSION_COOKIE: &str = "elemesh_session";
 
-fn sessions() -> &'static Mutex<HashSet<String>> {
-    static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    S.get_or_init(Default::default)
+/// A session as stored: bound to the passphrase it was signed in with, so a
+/// new passphrase signs every visitor out, and kept across restarts.
+fn session_key(node: &Node, token: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::new().chain_update(node.psk).chain_update(token.as_bytes()).finalize().to_vec()
 }
 
 /// How long an invite link works.
@@ -221,7 +223,7 @@ fn direct_local(req: &Request) -> bool {
 /// Who may use the API. This machine itself: everything. A device reaching
 /// the mesh page through this machine's web server: the page and the sign-in
 /// always, the rest once signed in with the mesh passphrase.
-async fn gate(mut req: Request, next: Next) -> Response {
+async fn gate(State(node): State<Arc<Node>>, mut req: Request, next: Next) -> Response {
     if direct_local(&req) {
         return next.run(req).await;
     }
@@ -234,7 +236,8 @@ async fn gate(mut req: Request, next: Next) -> Response {
     if path == "/" || path == "/v1/login" || path == "/v1/ping" {
         return next.run(req).await;
     }
-    let signed_in = session_of(&req).is_some_and(|t| sessions().lock().unwrap().contains(&t));
+    let now = crate::node::now_ms();
+    let signed_in = session_of(&req).is_some_and(|t| node.with_store(|s| s.has_session(&session_key(&node, &t), now)).unwrap_or(false));
     if !signed_in {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "enter the mesh passphrase", "login": true }))).into_response();
     }
@@ -270,7 +273,10 @@ async fn login(State(node): State<Arc<Node>>, Json(l): Json<Login>) -> Response 
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": why }))).into_response();
     }
     let token = hex::encode(rand::random::<[u8; 16]>());
-    sessions().lock().unwrap().insert(token.clone());
+    let until = crate::node::now_ms() + SESSION_MAX_AGE_S * 1000;
+    if node.with_store(|s| s.put_session(&session_key(&node, &token), until)).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
     let cookie = format!("{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_MAX_AGE_S}; HttpOnly; SameSite=Lax");
     ([(header::SET_COOKIE, cookie)], Json(json!({ "signed_in": true }))).into_response()
 }
@@ -306,7 +312,7 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/login", axum::routing::post(login))
         .route("/v1/ping", get(ping))
         .route("/v1/invite", axum::routing::post(invite))
-        .layer(middleware::from_fn(gate))
+        .layer(middleware::from_fn_with_state(node.clone(), gate))
         .with_state(node);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("api: http://{addr}/");

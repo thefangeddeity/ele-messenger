@@ -87,6 +87,9 @@ pub struct Node {
     /// node (the service manager, or the app) brings it back.
     pub restart: Notify,
     nearby: Mutex<HashMap<String, Heard>>,
+    /// Which node a link label (a Bluetooth address) turned out to be, so a
+    /// machine that advertises no name is still known when heard again.
+    known_via: Mutex<HashMap<String, NodeId>>,
     /// Names peers gave over encrypted links.
     names: Mutex<HashMap<NodeId, String>>,
     /// Transports this machine has running now (no Bluetooth adapter: no
@@ -119,6 +122,7 @@ impl Node {
             restart: Notify::new(),
             names: Default::default(),
             nearby: Mutex::new(HashMap::new()),
+            known_via: Default::default(),
             transports: Default::default(),
             pending_sigs: Default::default(),
         }
@@ -138,15 +142,19 @@ impl Node {
         Self { scout: true, ..Self::new(identity, [0; 32], store) }
     }
 
-    pub fn heard(&self, peer: Option<NodeId>, transport: &'static str, via: String) {
+    /// Notes a node heard nearby, and returns who it is: the id it
+    /// advertised, or the one an earlier link from the same address proved.
+    pub fn heard(&self, peer: Option<NodeId>, transport: &'static str, via: String) -> Option<NodeId> {
+        let peer = peer.or_else(|| self.known_via.lock().unwrap().get(&via).copied());
         if peer == Some(self.identity.id) {
-            return;
+            return peer;
         }
         let key = match peer {
             Some(p) => format!("{}/{transport}", hex::encode(p)),
             None => format!("{via}/{transport}"),
         };
         self.nearby.lock().unwrap().insert(key, Heard { peer, transport, via, at: Instant::now() });
+        peer
     }
 
     pub fn nearby(&self) -> Vec<NearbyStatus> {
@@ -234,6 +242,13 @@ impl Node {
             }
         }
         let now = Instant::now();
+        self.known_via.lock().unwrap().insert(label.clone(), peer);
+        let mut nearby = self.nearby.lock().unwrap();
+        if let Some(mut h) = nearby.remove(&format!("{label}/{transport}")) {
+            h.peer = Some(peer);
+            nearby.insert(format!("{}/{transport}", hex::encode(peer)), h);
+        }
+        drop(nearby);
         links.insert(id, LinkInfo { peer, initiator, transport, label, since: now, last_rx: now, tx });
         Some(id)
     }

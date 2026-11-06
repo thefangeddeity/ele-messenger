@@ -29,8 +29,6 @@ use crate::node::Node;
 
 /// Notifications queued for one central before it counts as stuck.
 const MAX_PENDING: usize = 512;
-/// Writes kept from a central that hasn't subscribed yet.
-const MAX_EARLY: usize = 16;
 
 pub async fn run(node: Arc<Node>) -> Result<()> {
     let (fatal_tx, mut fatal_rx) = mpsc::unbounded_channel();
@@ -55,7 +53,6 @@ struct State {
     manager: Option<Retained<CBPeripheralManager>>,
     stream: Option<Retained<CBMutableCharacteristic>>,
     sessions: HashMap<String, Session>,
-    early: HashMap<String, Vec<Vec<u8>>>,
     generation: u64,
 }
 
@@ -109,15 +106,16 @@ define_class!(
             if let Some(e) = error {
                 return self.fail(&format!("advertising: {}", e.localizedDescription()));
             }
-            // Not ble::set_advertising(true) yet: links *into* a Mac are
-            // unverified on hardware, so the Mac keeps dialling everyone
-            // (as before it advertised) rather than waiting to be dialled.
+            ble::set_advertising(true);
             tracing::info!("ble: advertising as {}", ble::local_name(&self.ivars().node.identity.id));
         }
 
         #[unsafe(method(peripheralManager:central:didSubscribeToCharacteristic:))]
         fn did_subscribe(&self, _manager: &CBPeripheralManager, central: &CBCentral, _ch: &CBCharacteristic) {
-            self.open_session(central);
+            // A write may have opened the session already.
+            if !self.ivars().state.borrow().sessions.contains_key(&central_id(central)) {
+                self.open_session(central);
+            }
         }
 
         #[unsafe(method(peripheralManager:central:didUnsubscribeFromCharacteristic:))]
@@ -129,22 +127,20 @@ define_class!(
 
         #[unsafe(method(peripheralManager:didReceiveWriteRequests:))]
         fn did_receive_writes(&self, manager: &CBPeripheralManager, requests: &NSArray<CBATTRequest>) {
-            let mut st = self.ivars().state.borrow_mut();
+            // A write from a central with no session starts one: a central
+            // that reconnects while CoreBluetooth still counts it subscribed
+            // gets no new subscribe call, and its handshake would go nowhere.
             for req in requests.iter() {
                 let central = unsafe { req.central() };
                 let id = central_id(&central);
                 let Some(value) = (unsafe { req.value() }) else { continue };
-                let bytes = value.to_vec();
-                if let Some(s) = st.sessions.get(&id) {
-                    let _ = s.inbound.send(bytes);
-                } else {
-                    let early = st.early.entry(id).or_default();
-                    if early.len() < MAX_EARLY {
-                        early.push(bytes);
-                    }
+                if !self.ivars().state.borrow().sessions.contains_key(&id) {
+                    self.open_session(&central);
+                }
+                if let Some(s) = self.ivars().state.borrow().sessions.get(&id) {
+                    let _ = s.inbound.send(value.to_vec());
                 }
             }
-            drop(st);
             // One response answers the whole batch.
             if let Some(first) = requests.firstObject() {
                 unsafe { manager.respondToRequest_withResult(&first, CBATTError::Success) };
@@ -200,9 +196,6 @@ impl Delegate {
         let generation = {
             let mut st = iv.state.borrow_mut();
             st.generation += 1;
-            for bytes in st.early.remove(&id).unwrap_or_default() {
-                let _ = inbound.send(bytes);
-            }
             let generation = st.generation;
             st.sessions.insert(
                 id.clone(),
@@ -349,7 +342,6 @@ impl Drop for Radio {
                 }
             }
             st.sessions.clear();
-            st.early.clear();
         });
     }
 }

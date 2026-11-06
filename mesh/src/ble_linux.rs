@@ -239,7 +239,7 @@ async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId,
                 continue;
             }
             let peer = name.as_deref().and_then(ble::peer_from_name);
-            node.heard(peer, "ble", addr.to_string());
+            let peer = node.heard(peer, "ble", addr.to_string());
             if !ble::should_dial(&node.identity.id, peer) {
                 continue;
             }

@@ -121,6 +121,10 @@ impl Store {
                  author BLOB PRIMARY KEY,
                  first_seq INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS sessions (
+                 key BLOB PRIMARY KEY,
+                 until_ms INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS cleared_here (
                  room TEXT PRIMARY KEY,
                  before_ms INTEGER NOT NULL
@@ -325,6 +329,21 @@ impl Store {
     }
 
     /// The first seq from which `author` is known to sign.
+    /// Keeps a visitor's sign-in until it expires, and forgets expired ones.
+    pub fn put_session(&self, key: &[u8], until_ms: u64) -> Result<()> {
+        self.conn.execute("DELETE FROM sessions WHERE until_ms < ?1", params![crate::node::now_ms() as i64])?;
+        self.conn.execute("INSERT OR REPLACE INTO sessions (key, until_ms) VALUES (?1, ?2)", params![key, until_ms as i64])?;
+        Ok(())
+    }
+
+    pub fn has_session(&self, key: &[u8], now_ms: u64) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM sessions WHERE key = ?1 AND until_ms >= ?2", params![key, now_ms as i64], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     pub fn signs_from(&self, author: &crate::proto::NodeId) -> Result<Option<u64>> {
         Ok(self
             .conn

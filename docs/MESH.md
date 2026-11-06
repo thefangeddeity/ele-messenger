@@ -141,8 +141,10 @@ only.
 - Visitors post as this machine (with their own nick), and may clear for
   everyone; renaming the machine, changing its passphrase and
   clear-for-me are refused.
-- Sessions and invites live in memory: restarting the service signs
-  visitors out.
+- Sign-ins are kept in the store for 30 days, so restarting the service
+  keeps visitors signed in; each is bound to the passphrase, so changing it
+  signs every visitor out. Unused invites live in memory and end with a
+  restart.
 
 ## Transports
 

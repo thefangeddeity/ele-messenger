@@ -43,8 +43,8 @@ pub async fn run(node: Arc<Node>) -> Result<()> {
         if !props.services.contains(&Uuid::from_u128(SERVICE_UUID)) {
             continue;
         }
-        let peer = props.local_name.as_deref().and_then(ble::peer_from_name);
-        node.heard(peer, "ble", format!("{id:?}"));
+        let named = props.local_name.as_deref().and_then(ble::peer_from_name);
+        let peer = node.heard(named, "ble", format!("{id:?}"));
         if !ble::should_dial(&node.identity.id, peer) || peer.is_some_and(|x| node.is_linked(&x, "ble")) {
             continue;
         }
