@@ -48,6 +48,10 @@ enum Cmd {
     Tail { room: String },
     /// Show this node and its links
     Status,
+    /// Let machines on the mesh reach this machine's SSH server (on/off)
+    SshAccess { state: String },
+    /// For ssh's ProxyCommand: ssh -o ProxyCommand="elemesh ssh-proxy %h" user@machine
+    SshProxy { machine: String },
     /// Show or set the name this machine signs messages with when no nick is given
     Name {
         /// New name; an empty string goes back to the host name
@@ -129,6 +133,18 @@ async fn main() -> Result<()> {
                 }
                 after = v["cursor"].as_i64().unwrap_or(after);
             }
+        }
+        Cmd::SshAccess { state } => {
+            let on = match state.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => bail!("say on or off"),
+            };
+            http(cli.api, "PUT", "/v1/ssh", Some(serde_json::json!({ "on": on }).to_string())).await?;
+            println!("SSH over the mesh is {} on this machine", if on { "on" } else { "off" });
+        }
+        Cmd::SshProxy { machine } => {
+            daemon::ssh_proxy(&machine).await?;
         }
         Cmd::Status => {
             println!("{}", serde_json::to_string_pretty(&http(cli.api, "GET", "/v1/status", None).await?)?);

@@ -30,6 +30,19 @@ pub enum Wire {
     /// After Name for the same reason: an older node drops only this frame
     /// and takes the entries unsigned.
     Sigs(Vec<Signed>),
+    /// SSH over the mesh: one frame of a tunnel to the peer's own sshd.
+    /// `from_opener` says which end sent it, so both ends can number
+    /// channels without colliding. Last, so older nodes drop it.
+    Tunnel { ch: u32, from_opener: bool, op: TunnelOp },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TunnelOp {
+    Open,
+    Opened,
+    Data(Vec<u8>),
+    /// Why, for the person at the other end; empty when simply finished.
+    Close(String),
 }
 
 /// An entry's signature, with its author's identity key so any node can

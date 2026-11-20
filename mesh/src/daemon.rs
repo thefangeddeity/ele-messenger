@@ -77,6 +77,11 @@ pub fn name(dir: &Path) -> String {
     name[..end].to_string()
 }
 
+/// `elemesh ssh-proxy`: a tunnel to a machine's SSH server, on stdin/stdout.
+pub async fn ssh_proxy(machine: &str) -> Result<()> {
+    crate::tunnel::proxy(crate::tunnel::DEFAULT_PORT, machine).await
+}
+
 pub fn set_name(dir: &Path, name: &str) -> Result<()> {
     let name = name.trim();
     anyhow::ensure!(name.len() <= crate::store::MAX_NICK, "name up to {} bytes", crate::store::MAX_NICK);
@@ -130,6 +135,9 @@ async fn start(node: Arc<Node>, opts: Options) -> Result<()> {
     if opts.ble {
         spawn_ble(node.clone());
     }
+    node.tunnels.allowed.store(crate::tunnel::load_allowed(&opts.state_dir), std::sync::atomic::Ordering::Relaxed);
+    let tunnel_at = std::net::SocketAddr::new(opts.api.ip(), crate::tunnel::DEFAULT_PORT);
+    tokio::spawn(crate::tunnel::serve(node.clone(), tunnel_at));
     tokio::select! {
         r = api::serve(node.clone(), opts.api) => r,
         _ = node.restart.notified() => {

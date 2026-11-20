@@ -97,6 +97,7 @@ pub struct Node {
     transports: Mutex<BTreeSet<&'static str>>,
     /// Signatures a link sent for the entries in its next Entries frame.
     pending_sigs: Mutex<HashMap<u64, Vec<crate::proto::Signed>>>,
+    pub tunnels: crate::tunnel::Tunnels,
 }
 
 enum Dial {
@@ -125,6 +126,7 @@ impl Node {
             known_via: Default::default(),
             transports: Default::default(),
             pending_sigs: Default::default(),
+            tunnels: Default::default(),
         }
     }
 
@@ -256,6 +258,35 @@ impl Node {
     pub fn remove_link(&self, id: u64) {
         self.links.lock().unwrap().remove(&id);
         self.pending_sigs.lock().unwrap().remove(&id);
+        self.tunnels.drop_link(id);
+    }
+
+    /// A link to the machine with this name or id, the fastest kind first.
+    pub fn link_to(&self, want: &str) -> Option<u64> {
+        let want = want.trim().to_lowercase();
+        let names = self.names.lock().unwrap();
+        let links = self.links.lock().unwrap();
+        let rank = |t: &str| match t { "lan" => 0, "ble" => 2, _ => 1 };
+        links
+            .iter()
+            .filter(|(_, l)| {
+                hex::encode(l.peer).starts_with(&want) && want.len() >= 4
+                    || names.get(&l.peer).is_some_and(|n| n.to_lowercase() == want)
+            })
+            .min_by_key(|(_, l)| rank(l.transport))
+            .map(|(id, _)| *id)
+    }
+
+    pub fn send_frame(&self, link: u64, msg: &Wire) {
+        self.send(link, msg);
+    }
+
+    /// Sends, waiting for room in the link's queue instead of dropping:
+    /// tunnel data can't be lost. False once the link is gone.
+    pub async fn send_frame_wait(&self, link: u64, msg: &Wire) -> bool {
+        let Ok(bytes) = msg.encode() else { return false };
+        let Some(tx) = self.links.lock().unwrap().get(&link).map(|l| l.tx.clone()) else { return false };
+        tx.send(bytes).await.is_ok()
     }
 
     pub fn links(&self) -> Vec<LinkStatus> {
@@ -369,6 +400,7 @@ impl Node {
                     tracing::warn!("peer speaks protocol v{version}, we speak v{PROTOCOL_VERSION}");
                 }
             }
+            Wire::Tunnel { ch, from_opener, op } => crate::tunnel::handle(self, link, ch, from_opener, op),
             Wire::Name(name) => {
                 let name = name.trim();
                 let peer = self.links.lock().unwrap().get(&link).map(|l| l.peer);

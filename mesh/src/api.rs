@@ -98,6 +98,26 @@ async fn clear(State(node): State<Arc<Node>>, Path(room): Path<String>, v: Optio
 }
 
 #[derive(Deserialize)]
+struct SshBody {
+    on: bool,
+}
+
+/// Lets machines on the mesh reach this one's SSH server, or stops it.
+async fn set_ssh(State(node): State<Arc<Node>>, v: Option<Extension<Visitor>>, Json(b): Json<SshBody>) -> Response {
+    if let Some(r) = visitor_refused(v, "changing SSH access") {
+        return r;
+    }
+    let Some(dir) = node.state_dir.clone() else { return err(anyhow::anyhow!("this node has no state directory")) };
+    match crate::tunnel::save_allowed(&dir, b.on) {
+        Ok(()) => {
+            node.tunnels.allowed.store(b.on, std::sync::atomic::Ordering::Relaxed);
+            Json(json!({ "ssh": b.on })).into_response()
+        }
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
 struct NameBody {
     name: String,
 }
@@ -165,6 +185,7 @@ async fn status(State(node): State<Arc<Node>>, v: Option<Extension<Visitor>>) ->
         "joined": !node.scout,
         "entries": entries,
         "transports": node.transports(),
+        "ssh": node.tunnels.allowed.load(std::sync::atomic::Ordering::Relaxed),
         "links": node.links(),
         "nearby": node.nearby(),
     }))
@@ -341,6 +362,7 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/rooms/{room}/messages/{seq}", axum::routing::delete(delete))
         .route("/v1/rooms/{room}/clear", axum::routing::post(clear))
         .route("/v1/name", axum::routing::put(set_name))
+        .route("/v1/ssh", axum::routing::put(set_ssh))
         .route("/v1/passphrase", axum::routing::post(set_passphrase))
         .route("/v1/login", axum::routing::post(login))
         .route("/v1/logout", axum::routing::post(logout))
