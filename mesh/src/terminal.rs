@@ -30,8 +30,11 @@ async fn session(ws: &mut WebSocket, machine: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
     let pty = native_pty_system().openpty(size(80, 24))?;
     let mut cmd = CommandBuilder::new("ssh");
+    // -C: terminal output is repetitive escape codes, and a Bluetooth link
+    // carries a few KB/s, so compressing costs far less than it saves.
     cmd.args([
         "-tt",
+        "-C",
         "-o",
         &format!("ProxyCommand=\"{}\" ssh-proxy %h", exe.display()),
         "-o",

@@ -154,10 +154,14 @@ neighbour over Bluetooth.
 
 - Off by default: `elemesh ssh-access on` on a machine lets the mesh reach
   its sshd (127.0.0.1:22). SSH's own keys or passwords still apply.
-- `ssh -o ProxyCommand="elemesh ssh-proxy %h" user@machine` opens a tunnel
+- `ssh -C -o ProxyCommand="elemesh ssh-proxy %h" user@machine` opens a tunnel
   through the local service (127.0.0.1:8741); `machine` is a name or id.
   The tunnel rides one direct link, Wi-Fi/LAN before Bluetooth, in
   `Tunnel` frames (last in the wire enum, so older nodes drop them).
+- Bluetooth carries a few KB/s: use `-C`, prefer tools that don't redraw
+  the screen every second (`htop -d 100`, `top -l 1`, `ps`), and if output
+  backs up, Enter `~.` ends the session at once instead of waiting for it
+  to drain.
 - The page's **Terminal** button does the same in the browser: this machine
   runs ssh with its own key in a pseudo-terminal and streams it over a
   websocket (`/v1/terminal/{machine}`), drawn by a bundled xterm.js
