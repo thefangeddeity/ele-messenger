@@ -66,8 +66,9 @@ pub fn handle(node: &Arc<Node>, link: u64, ch: u32, from_opener: bool, op: Tunne
                 let to = node.tunnels.target.lock().unwrap().clone().unwrap_or_else(|| SSHD.to_string());
                 match TcpStream::connect(to).await {
                     Ok(s) => {
+                        let rx = register(&node, key);
                         node.send_frame(link, &tunnel(ch, false, TunnelOp::Opened));
-                        pump(node, key, s).await;
+                        pump(node, key, s, rx).await;
                     }
                     Err(e) => node.send_frame(link, &tunnel(ch, false, TunnelOp::Close(format!("no SSH server there: {e}")))),
                 }
@@ -96,12 +97,19 @@ fn tunnel(ch: u32, from_opener: bool, op: TunnelOp) -> Wire {
     Wire::Tunnel { ch, from_opener, op }
 }
 
+/// Makes a channel ready to receive. It must happen before the peer learns
+/// of the channel: each side's first bytes (ssh's banner) can follow the
+/// open on the same link, and data for an unknown channel is dropped.
+fn register(node: &Node, key: Key) -> mpsc::UnboundedReceiver<Vec<u8>> {
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    node.tunnels.open.lock().unwrap().insert(key, tx);
+    rx
+}
+
 /// Carries bytes both ways between a local socket and the peer, until
 /// either side closes.
-async fn pump(node: Arc<Node>, key: Key, s: TcpStream) {
+async fn pump(node: Arc<Node>, key: Key, s: TcpStream, mut rx: mpsc::UnboundedReceiver<Vec<u8>>) {
     let (link, ch, mine) = key;
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    node.tunnels.open.lock().unwrap().insert(key, tx);
     let (mut r, mut w) = s.into_split();
     let down = async {
         while let Some(b) = rx.recv().await {
@@ -161,7 +169,7 @@ async fn read_line(s: &mut TcpStream) -> Result<String> {
 async fn client(node: Arc<Node>, mut s: TcpStream) -> Result<()> {
     let want = read_line(&mut s).await?;
     let opened = open(&node, &want).await;
-    let key = match opened {
+    let (key, rx) = match opened {
         Ok(k) => k,
         Err(e) => {
             s.write_all(format!("ERR {e:#}\n").as_bytes()).await?;
@@ -169,24 +177,27 @@ async fn client(node: Arc<Node>, mut s: TcpStream) -> Result<()> {
         }
     };
     s.write_all(b"OK\n").await?;
-    pump(node, key, s).await;
+    pump(node, key, s, rx).await;
     Ok(())
 }
 
-async fn open(node: &Arc<Node>, want: &str) -> Result<Key> {
+async fn open(node: &Arc<Node>, want: &str) -> Result<(Key, mpsc::UnboundedReceiver<Vec<u8>>)> {
     let link = node.link_to(want).with_context(|| format!("no link to {want:?} right now"))?;
     let ch = node.tunnels.next.fetch_add(1, Ordering::Relaxed);
     let key = (link, ch, true);
     let (tx, rx) = oneshot::channel();
     node.tunnels.waiting.lock().unwrap().insert(key, tx);
+    let data = register(node, key);
     node.send_frame(link, &tunnel(ch, true, TunnelOp::Open));
-    match tokio::time::timeout(std::time::Duration::from_secs(20), rx).await {
-        Ok(Ok(Ok(()))) => Ok(key),
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), rx).await;
+    if !matches!(result, Ok(Ok(Ok(())))) {
+        node.tunnels.waiting.lock().unwrap().remove(&key);
+        node.tunnels.open.lock().unwrap().remove(&key);
+    }
+    match result {
+        Ok(Ok(Ok(()))) => Ok((key, data)),
         Ok(Ok(Err(why))) => bail!("{why}"),
-        _ => {
-            node.tunnels.waiting.lock().unwrap().remove(&key);
-            bail!("{want} didn't answer (it may run an older ELE)")
-        }
+        _ => bail!("{want} didn't answer (it may run an older ELE)"),
     }
 }
 
@@ -275,5 +286,15 @@ mod tests {
         let mut back = vec![0u8; big.len()];
         s.read_exact(&mut back).await.unwrap();
         assert_eq!(back, big, "bytes cross intact, in order, across chunks");
+        drop(s);
+
+        // Connection after connection, the server's first bytes are never lost.
+        for i in 0..30 {
+            let (answer, mut s) = ask(port, &who).await;
+            assert_eq!(answer, "OK", "try {i}");
+            let mut banner = [0u8; 14];
+            s.read_exact(&mut banner).await.unwrap();
+            assert_eq!(&banner, b"SSH-2.0-test\r\n", "try {i}");
+        }
     }
 }
