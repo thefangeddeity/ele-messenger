@@ -47,6 +47,11 @@
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
   .card .row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
   .card .sub { font-size: 12px; color: var(--text-dim); }
+  .card .term-btn { margin-left: auto; font-size: 12px; padding: 1px 8px; }
+  .term { position: fixed; inset: 4vh 4vw; z-index: 50; background: #000; color: #f5f5f7; border: 1px solid var(--border-strong); border-radius: 10px; display: flex; flex-direction: column; padding: 8px; }
+  .term[hidden] { display: none; }
+  .term-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  #term-screen { flex: 1; min-height: 0; overflow: hidden; }
   .tag { font-size: 11.5px; color: var(--text-dim); }
   .tier { font-size: 12px; font-weight: 600; color: var(--text-dim); margin: 10px 0 4px; }
   .dot.on { color: var(--success); } .dot.off { color: var(--text-muted); }
@@ -126,6 +131,10 @@
     <h2>Around you: ELE Mesh</h2>
     <p class="hint">Machines heard nearby. Linked ones share messages.</p>
     <div id="machines"></div>
+    <div id="term" class="term" hidden>
+      <div class="term-head"><b id="term-title">Terminal</b><button id="term-close">Close</button></div>
+      <div id="term-screen"></div>
+    </div>
   </aside>
   <section class="chat" id="chat">
     <div class="bar">
@@ -298,6 +307,12 @@ function drawAround(s) {
     const how = m.linked.length
       ? byTransport(m.linked).map(transportName).join(", ")
       : `heard over ${byTransport(m.heard).map(transportName).join(", ")}: different passphrase, or still connecting`;
+    if (m.linked.length && m.id) {
+      const b = el("button", "term-btn", "Terminal");
+      b.title = `A shell on ${name}, through the mesh (SSH over the mesh must be on there)`;
+      b.onclick = () => openTerminal(m.id, name);
+      row.append(b);
+    }
     c.append(row, el("div", "sub", `${how} · ${m.seen} s ago`));
     out.push(c);
   }
@@ -421,6 +436,47 @@ async function signIn() {
 }
 $("signin-go").onclick = signIn;
 $("signin-pass").addEventListener("keydown", e => { if (e.key === "Enter") signIn(); });
+
+// Terminal: a shell on another machine through the mesh, drawn by xterm.js,
+// which this machine serves itself so it works with no internet.
+let term = null;
+function loadXterm() {
+  if (window.Terminal) return Promise.resolve();
+  return new Promise((ok, bad) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = API + "xterm.css"; document.head.append(css);
+    const js = document.createElement("script");
+    js.src = API + "xterm.js"; js.onload = ok; js.onerror = bad; document.head.append(js);
+  });
+}
+async function openTerminal(id, name) {
+  await loadXterm();
+  closeTerminal();
+  $("term").hidden = false;
+  $("term-title").textContent = "Terminal: " + name;
+  const t = new Terminal({ fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 13, cursorBlink: true });
+  t.open($("term-screen"));
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + API + "v1/terminal/" + encodeURIComponent(id));
+  ws.binaryType = "arraybuffer";
+  // No fit add-on: size the grid from the box, and tell the far end.
+  const size = () => {
+    const box = $("term-screen"), cols = Math.max(20, Math.floor(box.clientWidth / 8)), rows = Math.max(5, Math.floor(box.clientHeight / 17));
+    t.resize(cols, rows);
+    if (ws.readyState === 1) ws.send(new TextEncoder().encode(JSON.stringify([cols, rows])));
+  };
+  ws.onopen = () => { size(); t.focus(); };
+  ws.onmessage = ev => t.write(new Uint8Array(ev.data));
+  ws.onclose = () => t.write("\r\n[connection closed]\r\n");
+  t.onData(d => { if (ws.readyState === 1) ws.send(d); });
+  window.addEventListener("resize", size);
+  term = { t, ws, size };
+}
+function closeTerminal() {
+  if (!term) return;
+  term.ws.close(); term.t.dispose(); window.removeEventListener("resize", term.size);
+  term = null; $("term").hidden = true;
+}
+$("term-close").onclick = closeTerminal;
 
 useInvite().then(() => { status(); setInterval(status, 3000); switchRoom(); });
 </script>

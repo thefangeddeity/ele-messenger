@@ -97,6 +97,11 @@ async fn clear(State(node): State<Arc<Node>>, Path(room): Path<String>, v: Optio
     }
 }
 
+/// A shell on another machine, through the mesh, for the page's Terminal.
+async fn terminal(ws: axum::extract::ws::WebSocketUpgrade, Path(machine): Path<String>) -> Response {
+    ws.on_upgrade(move |s| crate::terminal::run(s, machine))
+}
+
 #[derive(Deserialize)]
 struct SshBody {
     on: bool,
@@ -266,7 +271,7 @@ async fn gate(State(node): State<Arc<Node>>, mut req: Request, next: Next) -> Re
     // out should be a quiet success, not a 401 the caller has to special-case
     // -- and it can do nothing harmful: it only ever forgets a token the
     // caller already presented.
-    if path == "/" || path == "/v1/login" || path == "/v1/ping" || path == "/v1/logout" {
+    if matches!(path, "/" | "/v1/login" | "/v1/ping" | "/v1/logout" | "/xterm.js" | "/xterm.css") {
         return next.run(req).await;
     }
     let now = crate::node::now_ms();
@@ -367,6 +372,9 @@ pub async fn serve(node: Arc<Node>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/v1/login", axum::routing::post(login))
         .route("/v1/logout", axum::routing::post(logout))
         .route("/v1/ping", get(ping))
+        .route("/v1/terminal/{machine}", get(terminal))
+        .route("/xterm.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("../assets/xterm.js")) }))
+        .route("/xterm.css", get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("../assets/xterm.css")) }))
         .route("/v1/invite", axum::routing::post(invite))
         .layer(middleware::from_fn_with_state(node.clone(), gate))
         .with_state(node);

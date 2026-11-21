@@ -19,4 +19,5 @@ mod node;
 mod proto;
 mod sign;
 mod store;
+mod terminal;
 mod tunnel;

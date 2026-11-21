@@ -146,6 +146,25 @@ only.
   signs every visitor out. Unused invites live in memory and end with a
   restart.
 
+## SSH over the mesh
+
+A machine's own SSH server can be reached through the mesh, over whatever
+link is up, so a machine whose Wi-Fi has failed is still reachable from a
+neighbour over Bluetooth.
+
+- Off by default: `elemesh ssh-access on` on a machine lets the mesh reach
+  its sshd (127.0.0.1:22). SSH's own keys or passwords still apply.
+- `ssh -o ProxyCommand="elemesh ssh-proxy %h" user@machine` opens a tunnel
+  through the local service (127.0.0.1:8741); `machine` is a name or id.
+  The tunnel rides one direct link, Wi-Fi/LAN before Bluetooth, in
+  `Tunnel` frames (last in the wire enum, so older nodes drop them).
+- The page's **Terminal** button does the same in the browser: this machine
+  runs ssh with its own key in a pseudo-terminal and streams it over a
+  websocket (`/v1/terminal/{machine}`), drawn by a bundled xterm.js
+  (MIT, `mesh/assets/`) so it works with no internet. Anyone signed in to
+  the page may open one: the mesh passphrase is the key to the household's
+  machines.
+
 ## Transports
 
 All transports carry the same encrypted byte stream; only the link layer
