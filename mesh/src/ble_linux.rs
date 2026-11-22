@@ -203,12 +203,14 @@ async fn any_connected(adapter: &Adapter) -> Result<bool> {
 }
 
 async fn scan_window(node: &Arc<Node>, adapter: &Adapter) -> Result<Vec<(NodeId, bluer::Device)>> {
-    // ELEMESH_BLE_DEBUG=1 scans unfiltered and logs everything heard, to tell
+    // ELEMESH_BLE_DEBUG=1 logs everything heard, to tell
     // "radio blocked" apart from "peer not advertising".
     let debug = std::env::var_os("ELEMESH_BLE_DEBUG").is_some();
-    let uuids = if debug { Default::default() } else { [Uuid::from_u128(SERVICE_UUID)].into_iter().collect() };
+    // No UUID in the filter: BlueZ 5.87 crashes matching UUID discovery
+    // filters (bluez issue 2282, fixed after 5.87), and every crash drops all
+    // links. Our own check below picks out mesh nodes instead.
     adapter
-        .set_discovery_filter(DiscoveryFilter { uuids, transport: DiscoveryTransport::Le, ..Default::default() })
+        .set_discovery_filter(DiscoveryFilter { transport: DiscoveryTransport::Le, ..Default::default() })
         .await?;
     // Discovery runs while this stream is alive.
     let events = adapter.discover_devices().await?;
